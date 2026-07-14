@@ -1,5 +1,5 @@
 /* ============================================================
-   Gaze Reader — styles
+   Gaze Reader styles
    Large type + generous line-height so each word span is a
    bigger target for the (coarse) webcam gaze estimate.
    ============================================================ */
@@ -59,16 +59,6 @@ button {
 button:disabled { opacity: 0.4; cursor: not-allowed; }
 button.ghost { background: transparent; color: var(--muted); border: 1px solid #c3cad6; }
 .chk { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
-.keyfield {
-  border: 1px solid #c3cad6;
-  border-radius: 8px;
-  padding: 7px 10px;
-  font-size: 12px;
-  width: 210px;
-  background: #fff;
-  color: var(--ink);
-}
-.keyfield::placeholder { color: #9aa3b2; }
 .fontctl { gap: 8px; }
 .fontctl input[type="range"] { width: 120px; cursor: pointer; }
 #fontSizeVal { font-family: ui-monospace, Menlo, monospace; min-width: 40px; }
@@ -94,10 +84,6 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid #
   padding: 0 2px;
   transition: background-color 120ms linear;
 }
-/* READ TRAIL: everything already covered, so you never lose your place.
-   This is the core "See Where You Read" highlight. Kept faint so the active
-   line/word still stand out on top of it. */
-.read-trail { background: rgba(37, 99, 235, 0.07); }
 /* current LINE highlight (strong signal, this is the reliable target) */
 .line-active { background: var(--line-hl); }
 /* current WORD highlight (best-effort) */
@@ -122,12 +108,42 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid #
 }
 .gazedot.cal { background: var(--cal); width: 16px; height: 16px; margin-left: -8px; margin-top: -8px; }
 
-/* ---------- calibration overlay ---------- */
-#calibOverlay, #accuracyOverlay {
+/* ---------- calibration / welcome overlays ---------- */
+#calibOverlay, #accuracyOverlay, #welcomeOverlay {
   position: fixed;
   inset: 0;
   z-index: 80;
   background: rgba(255, 255, 255, 0.94);
+}
+/* the welcome panel sits above the others and is fully interactive (unlike the
+   calibration panel, which lets clicks fall through to the targets) */
+#welcomeOverlay { z-index: 90; background: rgba(255, 255, 255, 0.97); }
+.calib-instructions.welcome {
+  pointer-events: auto;
+  max-width: 560px;
+  text-align: left;
+}
+.welcome h2 { font-size: 26px; text-align: center; }
+.welcome .lede {
+  color: var(--ink) !important;
+  font-size: 15px;
+  text-align: center;
+  margin-bottom: 20px;
+}
+.welcome .steps {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.65;
+  margin: 0 0 18px;
+  padding-left: 22px;
+}
+.welcome .steps li { margin-bottom: 7px; }
+.welcome .steps b { color: var(--ink); }
+.welcome button { display: block; width: 100%; margin-top: 4px; padding: 12px; font-size: 15px; }
+.welcome .fineprint {
+  text-align: center;
+  font-size: 12px;
+  margin: 10px 0 0;
 }
 .calib-instructions {
   position: absolute;
@@ -210,10 +226,8 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid #
 #hud td { padding: 2px 4px; vertical-align: top; }
 #hud td:first-child { color: var(--muted); white-space: nowrap; }
 #hud td:last-child { font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: right; }
-#dwellList { margin: 4px 0 0; padding-left: 20px; }
-#dwellList li { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
 
 .hidden { display: none !important; }
 
-/* WebGazer's own video/overlay — keep it small and out of the way */
+/* WebGazer's own video/overlay: keep it small and out of the way */
 #webgazerVideoContainer { top: 56px !important; left: 8px !important; }

@@ -6,21 +6,21 @@
     <title>Word-Level Gaze Reading Tracker</title>
     <!-- WebGazer, pinned to a stable published build on jsDelivr. -->
     <script src="https://cdn.jsdelivr.net/npm/webgazer@3.3.0/dist/webgazer.min.js"></script>
-    <link rel="stylesheet" href="styles.css?v=8" />
+    <link rel="stylesheet" href="styles.css?v=12" />
   </head>
   <body>
     <!-- ============ TOP BAR / CONTROLS ============ -->
     <header id="topbar">
       <div class="brand">
-        <strong>Gaze Reader</strong>
+        <strong>Word Gaze Tracker</strong>
         <span class="tag"
-          >webcam MVP · line-level reliable, word-level best-effort</span
+          >a basic mvp to test out webcam capabilities for word-level reading
+          tracking</span
         >
       </div>
       <div class="controls">
-        <button id="btnCalibrate">1 · Calibrate</button>
-        <button id="btnStart" disabled>2 · Start tracking</button>
-        <button id="btnStop" disabled>Stop</button>
+        <button id="btnReset">Reset tracking</button>
+        <button id="btnCalibrate" class="ghost">Recalibrate</button>
         <label class="chk"
           ><input type="checkbox" id="chkRawDot" checked /> raw dot</label
         >
@@ -29,41 +29,10 @@
           dot</label
         >
         <label class="chk"
-          ><input type="checkbox" id="chkLineLock" checked />
-          <b>line-lock (z-cut only)</b></label
-        >
-        <label class="chk"
-          ><input type="checkbox" id="chkHugeJump" checked /> huge-jump
-          relocate</label
-        >
-        <label class="chk"
-          >k
-          <input
-            type="number"
-            id="jumpK"
-            min="1"
-            max="12"
-            step="0.5"
-            value="4"
-            style="width: 52px"
-        /></label>
-        <label class="chk"
-          ><input type="checkbox" id="chkDynY" /> dynamic-Y calib (A/B)</label
-        >
-        <label class="chk"
-          ><input type="checkbox" id="chkJump" /> jump reading + LLM</label
-        >
-        <label class="chk"
-          ><input type="checkbox" id="chkTrail" /> read trail</label
-        >
-        <label class="chk"
-          ><input type="checkbox" id="chkHeat" /> dwell heatmap</label
+          ><input type="checkbox" id="chkCam" checked /> camera</label
         >
         <label class="chk"
           ><input type="checkbox" id="chkHud" checked /> debug HUD</label
-        >
-        <label class="chk"
-          ><input type="checkbox" id="chkCam" checked /> camera</label
         >
         <label class="chk fontctl"
           >font
@@ -77,15 +46,43 @@
           />
           <span id="fontSizeVal">48px</span>
         </label>
-        <input
-          type="password"
-          id="llmKey"
-          class="keyfield"
-          placeholder="OpenAI API key (optional, for LLM election)"
-        />
-        <button id="btnDump">Export dwell JSON</button>
       </div>
     </header>
+
+    <!-- ============ WELCOME / WALKTHROUGH OVERLAY ============ -->
+    <!-- Shown on load. Explains the whole flow before the camera is touched, so
+         the first thing a demo viewer sees is an instruction, not a dead UI. -->
+    <div id="welcomeOverlay">
+      <div class="calib-instructions welcome">
+        <h2>Read with your eyes</h2>
+        <p class="lede">
+          This tracks which word you are reading using nothing but your webcam,
+          and highlights it as you go.
+        </p>
+        <ol class="steps">
+          <li>
+            <b>Allow camera access</b> when your browser asks. Video never
+            leaves this machine.
+          </li>
+          <li>
+            <b>Click each of the 9 dots</b> 5 times, looking straight at your
+            cursor as you click.
+          </li>
+          <li>
+            <b>Stare at the center dot</b> for 3 seconds so we can measure your
+            accuracy.
+          </li>
+          <li><b>Just read.</b> Tracking starts on its own when that is done.</li>
+        </ol>
+        <p class="warn">
+          Sit about 50 to 70&nbsp;cm from the screen, keep your head still, and
+          put some even light on your face. That matters more than anything
+          else.
+        </p>
+        <button id="btnWelcomeStart">Start calibration</button>
+        <p class="fineprint">Takes about a minute.</p>
+      </div>
+    </div>
 
     <!-- ============ CALIBRATION OVERLAY ============ -->
     <div id="calibOverlay" class="hidden">
@@ -98,8 +95,8 @@
         </p>
         <p class="warn">
           Keep your <b>head still</b> and stay at a
-          <b>consistent distance</b> (~50–70&nbsp;cm) from the screen. Good,
-          even lighting on your face helps a lot.
+          <b>consistent distance</b> (about 50 to 70&nbsp;cm) from the screen.
+          Good, even lighting on your face helps a lot.
         </p>
         <p id="calibProgress">0 / 9 points complete</p>
         <button id="btnCalibDone" disabled>
@@ -118,8 +115,8 @@
           Stare at the center dot for a few seconds without moving your head.
         </p>
         <div id="accDot"></div>
-        <p id="accResult">measuring…</p>
-        <button id="btnAccDone" disabled>Continue</button>
+        <p id="accResult">measuring...</p>
+        <button id="btnAccDone" disabled>Start reading</button>
       </div>
     </div>
 
@@ -147,71 +144,43 @@
         </tr>
         <tr>
           <td>current line</td>
-          <td id="hudLine">—</td>
+          <td id="hudLine">-</td>
         </tr>
         <tr>
           <td>current word</td>
-          <td id="hudWord">—</td>
+          <td id="hudWord">-</td>
         </tr>
         <tr>
           <td>raw gaze</td>
-          <td id="hudRaw">—</td>
+          <td id="hudRaw">-</td>
         </tr>
         <tr>
           <td>calibrated</td>
-          <td id="hudCal">—</td>
+          <td id="hudCal">-</td>
         </tr>
         <tr>
           <td>Z-cut fired</td>
-          <td id="hudZcut">—</td>
-        </tr>
-        <tr>
-          <td>regression [k,b]</td>
-          <td id="hudReg">k=1.000, b=0.0</td>
-        </tr>
-        <tr>
-          <td>Y-pairs collected</td>
-          <td id="hudPairs">0</td>
-        </tr>
-        <tr>
-          <td>jump timer</td>
-          <td id="hudJump">—</td>
-        </tr>
-        <tr>
-          <td>error range</td>
-          <td id="hudErr">—</td>
-        </tr>
-        <tr>
-          <td>candidates</td>
-          <td id="hudCand">—</td>
-        </tr>
-        <tr>
-          <td>LLM pick</td>
-          <td id="hudLLM">—</td>
+          <td id="hudZcut">-</td>
         </tr>
         <tr>
           <td>horiz reach</td>
-          <td id="hudReach">—</td>
+          <td id="hudReach">-</td>
         </tr>
         <tr>
           <td>Z-cut status</td>
-          <td id="hudZReason">—</td>
+          <td id="hudZReason">-</td>
         </tr>
         <tr>
           <td>huge-jump dist</td>
-          <td id="hudHuge">—</td>
+          <td id="hudHuge">-</td>
         </tr>
         <tr>
           <td>last advance</td>
-          <td id="hudAdv">—</td>
+          <td id="hudAdv">-</td>
         </tr>
       </table>
-      <div id="dwellPanel">
-        <h3>Top dwell (ms)</h3>
-        <ol id="dwellList"></ol>
-      </div>
     </aside>
 
-    <script src="app.js?v=8"></script>
+    <script src="app.js?v=12"></script>
   </body>
 </html>
