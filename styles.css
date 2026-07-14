@@ -1,0 +1,219 @@
+/* ============================================================
+   Gaze Reader — styles
+   Large type + generous line-height so each word span is a
+   bigger target for the (coarse) webcam gaze estimate.
+   ============================================================ */
+
+:root {
+  --bg: #ffffff;               /* bright white reading background */
+  --panel: #f2f4f8;            /* light chrome for bars/overlays */
+  --ink: #14181f;              /* near-black text for high contrast on white */
+  --muted: #5b6472;
+  --accent: #2563eb;
+  --line-hl: rgba(37, 99, 235, 0.14);
+  --word-hl: rgba(255, 196, 0, 0.45);
+  --raw: #e11d48;
+  --cal: #16a34a;
+  --maxline: 92vw;   /* as wide as possible: longer lines => horizontal x is
+                        an even more reliable progress signal vs gaze error */
+  --passage-font: 48px; /* configurable via the top-bar slider; huge = easier
+                           gaze targets (each word span is physically bigger) */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ---------- top bar ---------- */
+#topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 18px;
+  background: var(--panel);
+  border-bottom: 1px solid #d5dbe4;
+  flex-wrap: wrap;
+}
+.brand strong { font-size: 16px; }
+.brand .tag { color: var(--muted); font-size: 12px; margin-left: 10px; }
+.controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+button {
+  background: var(--accent);
+  color: #ffffff;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button.ghost { background: transparent; color: var(--muted); border: 1px solid #c3cad6; }
+.chk { color: var(--muted); font-size: 13px; display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.keyfield {
+  border: 1px solid #c3cad6;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  width: 210px;
+  background: #fff;
+  color: var(--ink);
+}
+.keyfield::placeholder { color: #9aa3b2; }
+.fontctl { gap: 8px; }
+.fontctl input[type="range"] { width: 120px; cursor: pointer; }
+#fontSizeVal { font-family: ui-monospace, Menlo, monospace; min-width: 40px; }
+
+/* ---------- reading area ---------- */
+#reader {
+  display: flex;
+  justify-content: center;
+  padding: 48px 24px 120px;
+}
+#passage {
+  max-width: var(--maxline);
+  width: 100%;
+  font-size: var(--passage-font);  /* driven by the top-bar slider */
+  line-height: 2.2;                /* generous vertical spacing */
+  letter-spacing: 0.2px;
+}
+#passage p { margin: 0 0 1.4em; }
+
+/* each word is a span */
+.w {
+  border-radius: 5px;
+  padding: 0 2px;
+  transition: background-color 120ms linear;
+}
+/* READ TRAIL: everything already covered, so you never lose your place.
+   This is the core "See Where You Read" highlight. Kept faint so the active
+   line/word still stand out on top of it. */
+.read-trail { background: rgba(37, 99, 235, 0.07); }
+/* current LINE highlight (strong signal, this is the reliable target) */
+.line-active { background: var(--line-hl); }
+/* current WORD highlight (best-effort) */
+.word-active { background: var(--word-hl); color: #10131a; }
+/* relocation pulse: brief flash when a jump/force move lands here */
+.reloc-flash { animation: relocPulse 0.9s ease-out; }
+@keyframes relocPulse {
+  0%   { background: rgba(37, 99, 235, 0.85); color: #fff; }
+  100% { background: transparent; }
+}
+
+/* ---------- gaze dots ---------- */
+.gazedot {
+  position: fixed;
+  width: 14px; height: 14px;
+  margin-left: -7px; margin-top: -7px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 60;
+  background: var(--raw);
+  box-shadow: 0 0 0 2px rgba(0,0,0,0.4);
+}
+.gazedot.cal { background: var(--cal); width: 16px; height: 16px; margin-left: -8px; margin-top: -8px; }
+
+/* ---------- calibration overlay ---------- */
+#calibOverlay, #accuracyOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(255, 255, 255, 0.94);
+}
+.calib-instructions {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 520px;
+  text-align: center;
+  background: var(--panel);
+  border: 1px solid #d5dbe4;
+  border-radius: 14px;
+  padding: 24px 28px;
+  z-index: 2;
+  /* Let clicks fall THROUGH the panel to the calibration targets beneath the
+     center of the screen (which the panel would otherwise cover). Buttons
+     re-enable pointer events below. */
+  pointer-events: none;
+}
+.calib-instructions button { pointer-events: auto; }
+.calib-instructions .warn { color: #b45309; font-size: 14px; }
+.calib-instructions p { color: var(--muted); line-height: 1.5; }
+.calib-instructions h2 { margin-top: 0; color: var(--ink); }
+#calibProgress { color: var(--accent) !important; font-weight: 700; }
+
+.calib-target {
+  position: absolute;
+  width: 26px; height: 26px;
+  margin-left: -13px; margin-top: -13px;
+  border-radius: 50%;
+  background: #ff5a5a;
+  border: 3px solid #fff;
+  cursor: pointer;
+  z-index: 3;             /* above the instruction panel so the CENTER dot,
+                            which the panel overlaps, stays clickable */
+  opacity: 0.35;
+  transition: opacity 120ms, background-color 120ms, transform 120ms;
+}
+.calib-target:hover { transform: scale(1.15); }
+.calib-target.progress { opacity: 0.75; }
+.calib-target.done { background: var(--cal); opacity: 1; }
+
+#accDot {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  z-index: 1;
+}
+#accResult { font-weight: 700; }
+
+/* ---------- HUD ---------- */
+#hud {
+  position: fixed;
+  right: 14px; bottom: 14px;
+  width: 300px;
+  background: var(--panel);
+  border: 1px solid #d5dbe4;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 12.5px;
+  z-index: 50;
+  max-height: 70vh;
+  overflow: auto;
+}
+.hud-head { display: flex; align-items: center; justify-content: space-between; }
+#hud h3 { margin: 4px 0 8px; font-size: 13px; color: var(--accent); }
+.hud-close {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid #c3cad6;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+.hud-close:hover { color: var(--ink); background: #e6eaf1; }
+#hud table { width: 100%; border-collapse: collapse; }
+#hud td { padding: 2px 4px; vertical-align: top; }
+#hud td:first-child { color: var(--muted); white-space: nowrap; }
+#hud td:last-child { font-family: ui-monospace, "SF Mono", Menlo, monospace; text-align: right; }
+#dwellList { margin: 4px 0 0; padding-left: 20px; }
+#dwellList li { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+
+.hidden { display: none !important; }
+
+/* WebGazer's own video/overlay — keep it small and out of the way */
+#webgazerVideoContainer { top: 56px !important; left: 8px !important; }

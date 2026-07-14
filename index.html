@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Word-Level Gaze Reading Tracker (Webcam MVP)</title>
+  <!-- WebGazer, pinned to a stable published build on jsDelivr. -->
+  <script src="https://cdn.jsdelivr.net/npm/webgazer@3.3.0/dist/webgazer.min.js"></script>
+  <link rel="stylesheet" href="styles.css?v=8" />
+</head>
+<body>
+  <!-- ============ TOP BAR / CONTROLS ============ -->
+  <header id="topbar">
+    <div class="brand">
+      <strong>Gaze Reader</strong>
+      <span class="tag">webcam MVP · line-level reliable, word-level best-effort</span>
+    </div>
+    <div class="controls">
+      <button id="btnCalibrate">1 · Calibrate</button>
+      <button id="btnStart" disabled>2 · Start tracking</button>
+      <button id="btnStop" disabled>Stop</button>
+      <label class="chk"><input type="checkbox" id="chkRawDot" checked /> raw dot</label>
+      <label class="chk"><input type="checkbox" id="chkCalDot" checked /> calibrated dot</label>
+      <label class="chk"><input type="checkbox" id="chkLineLock" checked /> <b>line-lock (z-cut only)</b></label>
+      <label class="chk"><input type="checkbox" id="chkHugeJump" checked /> huge-jump relocate</label>
+      <label class="chk">k <input type="number" id="jumpK" min="1" max="12" step="0.5" value="4" style="width:52px" /></label>
+      <label class="chk"><input type="checkbox" id="chkDynY" /> dynamic-Y calib (A/B)</label>
+      <label class="chk"><input type="checkbox" id="chkJump" /> jump reading + LLM</label>
+      <label class="chk"><input type="checkbox" id="chkTrail" /> read trail</label>
+      <label class="chk"><input type="checkbox" id="chkHeat" /> dwell heatmap</label>
+      <label class="chk"><input type="checkbox" id="chkHud" checked /> debug HUD</label>
+      <label class="chk"><input type="checkbox" id="chkCam" checked /> camera</label>
+      <label class="chk fontctl">font
+        <input type="range" id="fontSize" min="24" max="140" step="2" value="48" />
+        <span id="fontSizeVal">48px</span>
+      </label>
+      <input type="password" id="llmKey" class="keyfield" placeholder="OpenAI API key (optional, for LLM election)" />
+      <button id="btnDump">Export dwell JSON</button>
+    </div>
+  </header>
+
+  <!-- ============ CALIBRATION OVERLAY ============ -->
+  <div id="calibOverlay" class="hidden">
+    <div class="calib-instructions">
+      <h2>Calibration</h2>
+      <p>
+        Click each of the <b>9 dots</b> while <b>looking directly at your cursor</b>.
+        Click each dot <b>5 times</b>. A dot turns green when it's done.
+      </p>
+      <p class="warn">
+        Keep your <b>head still</b> and stay at a <b>consistent distance</b> (~50–70&nbsp;cm)
+        from the screen. Good, even lighting on your face helps a lot.
+      </p>
+      <p id="calibProgress">0 / 9 points complete</p>
+      <button id="btnCalibDone" disabled>Finish calibration &amp; measure accuracy</button>
+      <button id="btnCalibCancel" class="ghost">Cancel</button>
+    </div>
+    <!-- 9 calibration targets injected by JS -->
+  </div>
+
+  <!-- ============ ACCURACY CHECK OVERLAY ============ -->
+  <div id="accuracyOverlay" class="hidden">
+    <div class="calib-instructions">
+      <h2>Accuracy check</h2>
+      <p>Stare at the center dot for a few seconds without moving your head.</p>
+      <div id="accDot"></div>
+      <p id="accResult">measuring…</p>
+      <button id="btnAccDone" disabled>Continue</button>
+    </div>
+  </div>
+
+  <!-- ============ READING AREA ============ -->
+  <main id="reader">
+    <div id="passage"><!-- words injected as spans --></div>
+  </main>
+
+  <!-- ============ GAZE DOTS (overlay, absolute positioned) ============ -->
+  <div id="rawDot" class="gazedot hidden"></div>
+  <div id="calDot" class="gazedot cal hidden"></div>
+
+  <!-- ============ DEBUG HUD ============ -->
+  <aside id="hud">
+    <div class="hud-head">
+      <h3>Debug HUD</h3>
+      <button id="btnHudClose" class="hud-close" title="Hide debug HUD">✕</button>
+    </div>
+    <table>
+      <tr><td>state</td><td id="hudState">idle</td></tr>
+      <tr><td>current line</td><td id="hudLine">—</td></tr>
+      <tr><td>current word</td><td id="hudWord">—</td></tr>
+      <tr><td>raw gaze</td><td id="hudRaw">—</td></tr>
+      <tr><td>calibrated</td><td id="hudCal">—</td></tr>
+      <tr><td>Z-cut fired</td><td id="hudZcut">—</td></tr>
+      <tr><td>regression [k,b]</td><td id="hudReg">k=1.000, b=0.0</td></tr>
+      <tr><td>Y-pairs collected</td><td id="hudPairs">0</td></tr>
+      <tr><td>jump timer</td><td id="hudJump">—</td></tr>
+      <tr><td>error range</td><td id="hudErr">—</td></tr>
+      <tr><td>candidates</td><td id="hudCand">—</td></tr>
+      <tr><td>LLM pick</td><td id="hudLLM">—</td></tr>
+      <tr><td>horiz reach</td><td id="hudReach">—</td></tr>
+      <tr><td>Z-cut status</td><td id="hudZReason">—</td></tr>
+      <tr><td>huge-jump dist</td><td id="hudHuge">—</td></tr>
+      <tr><td>last advance</td><td id="hudAdv">—</td></tr>
+    </table>
+    <div id="dwellPanel">
+      <h3>Top dwell (ms)</h3>
+      <ol id="dwellList"></ol>
+    </div>
+  </aside>
+
+  <script src="app.js?v=8"></script>
+</body>
+</html>
