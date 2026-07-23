@@ -739,6 +739,17 @@ async function ensureWebgazer() {
     .setGazeListener(onGaze)
     .saveDataAcrossSessions(false);
 
+  // Apply any camera preference the user picked in Settings before the camera
+  // is opened. setCameraConstraints stores the constraints on WebGazer's params,
+  // which begin() then feeds straight into getUserMedia.
+  if (pendingCameraConstraints) {
+    try {
+      await webgazer.setCameraConstraints(pendingCameraConstraints);
+    } catch (e) {
+      console.warn("Camera constraints rejected, falling back to default:", e);
+    }
+  }
+
   await webgazer.begin(); // starts camera + creates video/overlay elements
 
   setCamVisible(chkCam ? chkCam.checked : true); // respect the camera toggle
@@ -894,6 +905,174 @@ function setCamVisible(v) {
 const chkCam = document.getElementById("chkCam");
 if (chkCam)
   chkCam.addEventListener("change", (e) => setCamVisible(e.target.checked));
+
+/* ------------------------------------------------------------------ */
+/* 11b. Settings menu: pick which webcam WebGazer feeds from.         */
+/* ------------------------------------------------------------------ */
+// The constraints we'll hand to WebGazer for the next begin(). Populated by
+// the Settings dropdown. If null, WebGazer uses its default (first camera).
+let pendingCameraConstraints = null;
+// The deviceId we last selected, so the dropdown stays in sync after a refresh.
+let selectedCameraId = null;
+const CAM_PREF_KEY = "wg_camera_device_id";
+
+const settingsOverlay = document.getElementById("settingsOverlay");
+const cameraSelect = document.getElementById("cameraSelect");
+const cameraHint = document.getElementById("cameraHint");
+const btnRefreshCameras = document.getElementById("btnRefreshCameras");
+const btnSettingsClose = document.getElementById("btnSettingsClose");
+
+// Build constraints for a specific camera. We MERGE the deviceId into WebGazer's
+// own default video constraints (width/height/facingMode) instead of replacing
+// them -- if we only pass {deviceId:{exact}}, the browser is free to pick any
+// resolution, and many webcams will then hand WebGazer a low/default resolution
+// that degrades face-detection accuracy. Keeping the resolution prefs keeps the
+// tracker fed the same quality stream it expects.
+function cameraConstraintsFor(deviceId) {
+  if (!deviceId) return null;
+  return {
+    video: {
+      width: { min: 320, ideal: 640, max: 1920 },
+      height: { min: 240, ideal: 480, max: 1080 },
+      facingMode: "user",
+      deviceId: { exact: deviceId },
+    },
+  };
+}
+
+// Enumerate videoinput devices and fill the <select>. Labels are blank until
+// the user has granted camera permission, so we surface a hint when that's the
+// case (we still show the count so they know multiple cameras exist).
+async function populateCameraList() {
+  if (!cameraSelect) return;
+  let devices = [];
+  try {
+    devices = await navigator.mediaDevices.enumerateDevices();
+  } catch (e) {
+    cameraHint.textContent =
+      "Could not list cameras: " + (e.message || e) + ".";
+    return;
+  }
+  const cams = devices.filter((d) => d.kind === "videoinput");
+
+  // Preserve the current selection if it's still present.
+  const prevValue = cameraSelect.value;
+  cameraSelect.innerHTML = "";
+
+  if (cams.length === 0) {
+    const opt = document.createElement("option");
+    opt.textContent = "No cameras found";
+    opt.value = "";
+    opt.disabled = true;
+    cameraSelect.appendChild(opt);
+    cameraHint.textContent =
+      "No video input devices detected. Connect a webcam and click Refresh.";
+    return;
+  }
+
+  const hasLabels = cams.some((c) => c.label && c.label.length > 0);
+  cams.forEach((cam, i) => {
+    const opt = document.createElement("option");
+    opt.value = cam.deviceId;
+    // Before permission is granted, labels are empty -- show a positional name
+    // so the user at least sees how many cameras there are.
+    opt.textContent = cam.label || "Camera " + (i + 1);
+    cameraSelect.appendChild(opt);
+  });
+
+  // Restore selection: explicit prior choice > saved preference > first device.
+  let targetId =
+    selectedCameraId ||
+    localStorage.getItem(CAM_PREF_KEY) ||
+    prevValue ||
+    cams[0].deviceId;
+  if (!cams.some((c) => c.deviceId === targetId)) targetId = cams[0].deviceId;
+  cameraSelect.value = targetId;
+
+  if (hasLabels) {
+    cameraHint.innerHTML =
+      "Switching the camera invalidates calibration &mdash; recalibrate afterwards.";
+  } else {
+    cameraHint.textContent =
+      "Camera labels are hidden until you grant camera permission. " +
+      "Start calibration once, then re-open Settings to pick a specific camera.";
+  }
+}
+
+// Apply the selected camera: live if WebGazer is running, otherwise stash the
+// constraints for the next begin(). Persists the choice so external webcams
+// stay selected across sessions.
+async function applyCameraSelection(deviceId) {
+  selectedCameraId = deviceId || null;
+  pendingCameraConstraints = cameraConstraintsFor(deviceId);
+  if (deviceId) {
+    try {
+      localStorage.setItem(CAM_PREF_KEY, deviceId);
+    } catch (e) {}
+  } else {
+    try {
+      localStorage.removeItem(CAM_PREF_KEY);
+    } catch (e) {}
+  }
+
+  if (webgazerStarted && pendingCameraConstraints) {
+    // WebGazer's setCameraConstraints swaps the live track, then resets the
+    // tracker -- so the existing calibration no longer matches. Tell the user.
+    try {
+      await webgazer.setCameraConstraints(pendingCameraConstraints);
+      setHudState("camera switched (recalibrate)");
+      cameraHint.innerHTML =
+        "<b>Camera switched.</b> The live track changed, so your calibration " +
+        "is now stale. Click <b>Recalibrate</b> to re-train on the new camera.";
+    } catch (e) {
+      cameraHint.textContent =
+        "Could not switch camera: " + (e.message || e) +
+        ". Try closing other apps using the webcam.";
+    }
+  }
+}
+
+function openSettings() {
+  if (!settingsOverlay) return;
+  settingsOverlay.classList.remove("hidden");
+  populateCameraList();
+}
+function closeSettings() {
+  if (settingsOverlay) settingsOverlay.classList.add("hidden");
+}
+
+const btnSettings = document.getElementById("btnSettings");
+if (btnSettings) btnSettings.addEventListener("click", openSettings);
+if (btnSettingsClose) btnSettingsClose.addEventListener("click", closeSettings);
+if (btnRefreshCameras)
+  btnRefreshCameras.addEventListener("click", populateCameraList);
+if (cameraSelect)
+  cameraSelect.addEventListener("change", (e) =>
+    applyCameraSelection(e.target.value)
+  );
+// Clicking the backdrop (outside the panel) closes the menu.
+if (settingsOverlay)
+  settingsOverlay.addEventListener("click", (e) => {
+    if (e.target === settingsOverlay) closeSettings();
+  });
+// Hot-plugged cameras: re-populate so a newly connected webcam shows up.
+if (navigator.mediaDevices && navigator.mediaDevices.ondevicechange !== undefined)
+  navigator.mediaDevices.addEventListener("devicechange", () => {
+    if (!settingsOverlay || !settingsOverlay.classList.contains("hidden"))
+      populateCameraList();
+  });
+
+// Restore a saved camera preference on load so the external webcam is the
+// default without the user having to re-open Settings every session.
+(function restoreCameraPref() {
+  try {
+    const saved = localStorage.getItem(CAM_PREF_KEY);
+    if (saved) {
+      selectedCameraId = saved;
+      pendingCameraConstraints = cameraConstraintsFor(saved);
+    }
+  } catch (e) {}
+})();
 
 // Passage font size. Bigger type = physically bigger word spans = easier gaze
 // targets. Changing it reflows the text, so we rebuild the layout model and

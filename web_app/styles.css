@@ -231,3 +231,47 @@ button.ghost { background: transparent; color: var(--muted); border: 1px solid #
 
 /* WebGazer's own video/overlay: keep it small and out of the way */
 #webgazerVideoContainer { top: 56px !important; left: 8px !important; }
+
+/* ---------- settings overlay ---------- */
+#settingsOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  background: rgba(255, 255, 255, 0.94);
+}
+.settings-panel {
+  pointer-events: auto;
+  text-align: left;
+  max-width: 460px;
+}
+.settings-panel h2 { margin: 0; font-size: 18px; }
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 18px 0 6px;
+}
+.setting-label {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.setting-select {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  font-size: 13px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid #c3cad6;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.setting-select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.setting-hint {
+  color: var(--muted) !important;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 10px 0 0;
+}

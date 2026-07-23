@@ -6,7 +6,7 @@
     <title>Word-Level Gaze Reading Tracker</title>
     <!-- WebGazer, pinned to a stable published build on jsDelivr. -->
     <script src="https://cdn.jsdelivr.net/npm/webgazer@3.3.0/dist/webgazer.min.js"></script>
-    <link rel="stylesheet" href="styles.css?v=12" />
+    <link rel="stylesheet" href="styles.css?v=13" />
   </head>
   <body>
     <!-- ============ TOP BAR / CONTROLS ============ -->
@@ -21,6 +21,7 @@
       <div class="controls">
         <button id="btnReset">Reset tracking</button>
         <button id="btnCalibrate" class="ghost">Recalibrate</button>
+        <button id="btnSettings" class="ghost">Settings</button>
         <label class="chk"
           ><input type="checkbox" id="chkRawDot" checked /> raw dot</label
         >
@@ -182,6 +183,29 @@
       </table>
     </aside>
 
-    <script src="app.js?v=12"></script>
+    <!-- ============ SETTINGS OVERLAY ============ -->
+    <div id="settingsOverlay" class="hidden">
+      <div class="calib-instructions settings-panel">
+        <div class="hud-head">
+          <h2>Settings</h2>
+          <button id="btnSettingsClose" class="hud-close" title="Close settings">
+            ✕
+          </button>
+        </div>
+        <div class="setting-row">
+          <label for="cameraSelect" class="setting-label">Video input source</label>
+          <select id="cameraSelect" class="setting-select"></select>
+          <button id="btnRefreshCameras" class="ghost" title="Re-scan for cameras">
+            Refresh
+          </button>
+        </div>
+        <p id="cameraHint" class="setting-hint">
+          Allow camera access first to see labeled devices. Switching the
+          camera invalidates calibration &mdash; recalibrate afterwards.
+        </p>
+      </div>
+    </div>
+
+    <script src="app.js?v=13"></script>
   </body>
 </html>
