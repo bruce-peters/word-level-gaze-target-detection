@@ -10,6 +10,7 @@
 
 import CoreGraphics
 import Combine
+import Foundation
 
 // "How many sigmas is HUGE": bigger = harder to trigger a relocation.
 let JUMP_K: CGFloat = 4

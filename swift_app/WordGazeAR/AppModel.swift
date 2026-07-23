@@ -5,6 +5,7 @@
 
 import SwiftUI
 import Combine
+import Foundation
 
 enum AppPhase {
     case welcome
