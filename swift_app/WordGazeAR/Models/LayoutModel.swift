@@ -9,6 +9,7 @@
 // tracker snaps gaze onto.
 
 import UIKit
+import SwiftUI
 
 let PASSAGE_TEXT =
     "A Hare was making fun of the Tortoise one day for being so slow. " +
@@ -88,6 +89,12 @@ final class LayoutModel: ObservableObject {
         self.yPad = yPad
     }
 
+    /// SwiftUI-side equivalent of `font`, built from the same name/size so
+    /// rendered word glyphs line up with the NSString-measured layout below.
+    var swiftUIFont: Font {
+        Font.custom(font.fontName, size: font.pointSize)
+    }
+
     var contentHeight: CGFloat {
         (lines.last?.yCenter ?? 0) + font.lineHeight
     }
@@ -106,10 +113,10 @@ final class LayoutModel: ObservableObject {
 
         var newWords: [Word] = []
         var rowWordIDs: [[Int]] = [[]]
-        var rowYCenters: [CGFloat] = []
+        var rowYCenters: [CGFloat] = [yPad + lineHeight / 2]
 
         var wid = 0
-        var y = yPad + lineHeight / 2
+        var y = rowYCenters[0]
         var x = xPad
 
         let tokens = PASSAGE_TEXT.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
@@ -120,19 +127,13 @@ final class LayoutModel: ObservableObject {
                 x = xPad
                 y += lineHeight
                 rowWordIDs.append([])
+                rowYCenters.append(y)
             }
             let word = Word(id: wid, text: text, xStart: x, xEnd: x + w, yCenter: y, lineHeight: lineHeight)
             newWords.append(word)
             rowWordIDs[rowWordIDs.count - 1].append(wid)
             x = word.xEnd + spaceWidth
             wid += 1
-        }
-        // one y-center per row, in the order rows were created (already top->bottom)
-        rowYCenters = []
-        var yy = yPad + lineHeight / 2
-        for i in 0..<rowWordIDs.count {
-            rowYCenters.append(yy)
-            if i < rowWordIDs.count - 1 { yy += lineHeight }
         }
 
         var builtLines: [Line] = []

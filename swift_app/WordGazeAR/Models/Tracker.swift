@@ -215,7 +215,9 @@ final class Tracker {
         for s in layout.sentences {
             let w = layout.words[s.startWordID]
             let cx = (w.xStart + w.xEnd) / 2
-            let d = hypot(cx - px, w.yCenter - py)
+            let dx = cx - px
+            let dy = w.yCenter - py
+            let d = (dx * dx + dy * dy).squareRoot()
             if d < bestD {
                 bestD = d
                 best = s

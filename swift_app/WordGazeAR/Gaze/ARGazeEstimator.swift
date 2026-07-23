@@ -24,6 +24,7 @@
 import ARKit
 import Combine
 import QuartzCore
+import Foundation
 
 struct GazeSample {
     let pitch: Double
@@ -119,7 +120,8 @@ final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
         // Rotate into camera space so the angle is relative to the device,
         // not to wherever ARKit's world origin happened to start.
         let cameraInverse = camera.transform.inverse
-        let dirCameraVec = (cameraInverse * simd_float4(dirWorld, 0)).xyz
+        let dirWorld4 = SIMD4<Float>(dirWorld.x, dirWorld.y, dirWorld.z, 0)
+        let dirCameraVec = (cameraInverse * dirWorld4).xyz
         guard simd_length(dirCameraVec) > 1e-6 else { return nil }
         let dirCamera = simd_normalize(dirCameraVec)
 
