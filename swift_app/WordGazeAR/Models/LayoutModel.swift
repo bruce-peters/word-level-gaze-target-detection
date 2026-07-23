@@ -10,6 +10,7 @@
 
 import UIKit
 import SwiftUI
+import Combine
 
 let PASSAGE_TEXT =
     "A Hare was making fun of the Tortoise one day for being so slow. " +
