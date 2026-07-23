@@ -28,10 +28,12 @@ struct CalibrationView: View {
                     }, perform: {
                         model.markPointDone(idx)
                     })
+                    .zIndex(1)
             }
 
             infoPanel
                 .position(x: rootSize.width / 2, y: min(120, rootSize.height * 0.16))
+                .zIndex(0)
         }
         .frame(width: rootSize.width, height: rootSize.height)
     }
