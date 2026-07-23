@@ -9,6 +9,7 @@
 // z-jumps" subset the demo actually needs.
 
 import CoreGraphics
+import Combine
 
 // "How many sigmas is HUGE": bigger = harder to trigger a relocation.
 let JUMP_K: CGFloat = 4
