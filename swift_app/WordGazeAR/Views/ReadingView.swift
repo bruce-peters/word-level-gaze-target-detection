@@ -14,7 +14,18 @@ private struct ContentOriginKey: PreferenceKey {
 
 struct ReadingView: View {
     @ObservedObject var model: AppModel
+    // Observed directly (not just reached via `model.layout`) so that a
+    // layout-only change -- e.g. a font-size edit from Settings, which
+    // doesn't touch any of AppModel's own @Published properties -- still
+    // triggers a re-render. `model.objectWillChange` alone wouldn't catch it.
+    @ObservedObject private var layout: LayoutModel
     @State private var showHUD = true
+    @State private var showSettings = false
+
+    init(model: AppModel) {
+        self.model = model
+        self.layout = model.layout
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,22 +39,22 @@ struct ReadingView: View {
                         }
                         .frame(width: 1, height: 1)
 
-                        ForEach(model.layout.words) { word in
+                        ForEach(layout.words) { word in
                             WordView(word: word,
                                       state: model.tracker.state,
                                       flashWordID: model.relocationFlashWordID,
-                                      font: model.layout.swiftUIFont) {
+                                      font: layout.swiftUIFont) {
                                 model.forceRelocate(wordID: word.id)
                             }
                         }
                     }
                     .frame(width: geo.size.width,
-                           height: max(model.layout.contentHeight, geo.size.height),
+                           height: max(layout.contentHeight, geo.size.height),
                            alignment: .topLeading)
                 }
-                .onAppear { model.layout.build(width: geo.size.width) }
+                .onAppear { layout.build(width: geo.size.width) }
                 .onChange(of: geo.size.width) { newWidth in
-                    model.layout.build(width: newWidth)
+                    layout.build(width: newWidth)
                 }
                 .onPreferenceChange(ContentOriginKey.self) { origin in
                     model.updateContentOrigin(origin)
@@ -56,6 +67,9 @@ struct ReadingView: View {
                 HUDView(model: model).padding(10)
             }
         }
+        .sheet(isPresented: $showSettings) {
+            SettingsView(model: model)
+        }
     }
 
     private var topBar: some View {
@@ -63,6 +77,8 @@ struct ReadingView: View {
             Text("Word Gaze AR").font(.subheadline).bold().foregroundColor(.white)
             Spacer()
             Button(showHUD ? "Hide HUD" : "Show HUD") { showHUD.toggle() }
+                .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.4)))
+            Button("Settings") { showSettings = true }
                 .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.4)))
             Button("Reset") { model.resetTracking() }
                 .buttonStyle(PillButtonStyle(color: Color(red: 0.145, green: 0.388, blue: 0.922)))

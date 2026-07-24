@@ -10,6 +10,7 @@ import Foundation
 enum AppPhase {
     case welcome
     case calibrating
+    case accuracyCheck
     case reading
 }
 
@@ -33,14 +34,23 @@ final class AppModel: ObservableObject {
     @Published var zcutFlash = false
     @Published var relocationFlashWordID: Int? = nil
 
+    @Published var accuracyResultText: String? = nil
+    @Published var accuracyReady = false
+
     let gaze = ARGazeEstimator()
     let calibrator = Calibrator()
     private let filter = GazeFilter()
     let layout: LayoutModel
     let tracker: Tracker
+    let dynamicY = DynamicYCalibrator()
 
     private var capturing = false
     private var activeScreenPoint: CGPoint? = nil
+
+    private var accuracySamples: [CGPoint] = []
+    private var accuracyTargetPoint: CGPoint = .zero
+    private var accuracyActive = false
+    private var accuracyToken = UUID()
 
     /// Top-left of the passage's scrollable content, in the same root/screen
     /// coordinate space `rawPoint`/`filteredPoint` and calibration targets
@@ -74,8 +84,27 @@ final class AppModel: ObservableObject {
         calibError = nil
         calibDoneIndices = []
         calibrator.clear()
+        dynamicY.reset()
+        tracker.state.calibStdPx = nil
+        tracker.state.measuredErrPx = nil
+        accuracyResultText = nil
+        accuracyReady = false
         gaze.start()
         phase = .calibrating
+    }
+
+    /// Builds the passage layout as soon as the screen size is known, so
+    /// things that need it before ReadingView ever mounts -- namely the
+    /// accuracy check's line-gap estimate -- have real geometry to work
+    /// with instead of a fallback default.
+    func ensureLayoutBuilt(width: CGFloat) {
+        if layout.builtWidth <= 1 {
+            layout.build(width: width)
+        }
+    }
+
+    func setFontSize(_ size: CGFloat) {
+        layout.setFontSize(size)
     }
 
     func beginCapture(pointIndex: Int, at screenPoint: CGPoint) {
@@ -103,6 +132,77 @@ final class AppModel: ObservableObject {
             calibrator.clear()
             return
         }
+        accuracyResultText = nil
+        accuracyReady = false
+        filteredPoint = nil
+        phase = .accuracyCheck
+    }
+
+    // MARK: - accuracy check (measures gaze noise -> huge-jump sigma)
+
+    /// Starts the ~3s stare-at-the-dot measurement. `dotPoint` is in the
+    /// same root/screen coordinate space as calibration targets and
+    /// `rawPoint`.
+    func beginAccuracyCheck(dotPoint: CGPoint) {
+        accuracyTargetPoint = dotPoint
+        accuracySamples = []
+        accuracyActive = true
+        accuracyResultText = "Measuring... keep looking at the dot"
+        accuracyReady = false
+
+        let token = UUID()
+        accuracyToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            guard let self, self.accuracyToken == token else { return }
+            self.finishAccuracyCheck()
+        }
+    }
+
+    private func finishAccuracyCheck() {
+        accuracyActive = false
+        guard accuracySamples.count >= 5 else {
+            accuracyResultText = "Not enough gaze samples -- check lighting and keep your face in frame, then try again."
+            accuracyReady = true
+            return
+        }
+
+        let n = CGFloat(accuracySamples.count)
+        let meanX = accuracySamples.reduce(CGFloat(0)) { $0 + $1.x } / n
+        let meanY = accuracySamples.reduce(CGFloat(0)) { $0 + $1.y } / n
+        let dx = meanX - accuracyTargetPoint.x
+        let dy = meanY - accuracyTargetPoint.y
+        let errPx = (dx * dx + dy * dy).squareRoot()
+        let varSum = accuracySamples.reduce(CGFloat(0)) { acc, p in
+            let ddx = p.x - meanX
+            let ddy = p.y - meanY
+            return acc + ddx * ddx + ddy * ddy
+        }
+        let stdPx = (varSum / n).squareRoot()
+
+        // This is the payoff: calibStdPx feeds Tracker.jumpSigma(), which
+        // sets the huge-jump threshold (JUMP_K * sigma) -- so the jump
+        // detector is now scaled to this user's actually-measured noise
+        // instead of a generic line-gap fallback.
+        tracker.state.measuredErrPx = errPx
+        tracker.state.calibStdPx = stdPx
+
+        let gap = tracker.estimateLineGap()
+        let verdict: String
+        if errPx < gap {
+            verdict = "good enough for line-level tracking."
+        } else if errPx < gap * 2 {
+            verdict = "usable, expect some drift."
+        } else {
+            verdict = "coarse -- consider recalibrating or improving lighting."
+        }
+        accuracyResultText = String(
+            format: "Mean error \u{2248} %.0fpx, noise \u{03C3} \u{2248} %.0fpx (line gap \u{2248} %.0fpx). %@",
+            errPx, stdPx, gap, verdict
+        )
+        accuracyReady = true
+    }
+
+    func finishAccuracyAndStartReading() {
         startReading()
     }
 
@@ -115,9 +215,12 @@ final class AppModel: ObservableObject {
     func restart() {
         gaze.stop()
         calibrator.clear()
+        dynamicY.reset()
         calibDoneIndices = []
         rawPoint = nil
         filteredPoint = nil
+        accuracyResultText = nil
+        accuracyReady = false
         phase = .welcome
     }
 
@@ -144,6 +247,7 @@ final class AppModel: ObservableObject {
 
     func forceRelocate(wordID: Int) {
         let w = tracker.forceRelocate(wordID: wordID, nowMs: ARGazeEstimator.nowMs())
+        dynamicY.discardCurrentLine()
         relocationFlashWordID = w.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             if self?.relocationFlashWordID == w.id { self?.relocationFlashWordID = nil }
@@ -160,13 +264,41 @@ final class AppModel: ObservableObject {
         guard calibrator.isFitted, let raw = calibrator.predict(pitch: sample.pitch, yaw: sample.yaw) else { return }
         rawPoint = raw
 
+        if phase == .accuracyCheck, accuracyActive {
+            accuracySamples.append(raw)
+        }
+
         guard phase == .reading else { return }
         let filtered = filter.filter(x: Double(raw.x), y: Double(raw.y), tSec: sample.timestampMs / 1000)
         filteredPoint = filtered
 
         let contentX = filtered.x - contentOrigin.x
         let contentY = filtered.y - contentOrigin.y
-        let zcut = tracker.processGaze(gx: contentX, gy: contentY, nowMs: sample.timestampMs)
+
+        // Feed this line's raw (pre-dynamic-calibration) Y into the rolling
+        // per-line average *before* asking the tracker to assign a line, so
+        // it's attributed to whichever line was active going into this
+        // sample -- then hand the tracker the dynamic-Y-corrected value.
+        let lineBefore = tracker.state.currentLine
+        dynamicY.recordSample(rawY: contentY)
+        let calibratedY = dynamicY.calibrate(contentY)
+
+        let zcut = tracker.processGaze(gx: contentX, gy: calibratedY, nowMs: sample.timestampMs)
+
+        if tracker.state.currentLine != lineBefore {
+            if tracker.state.lineAdvancedBy == .zcut, layout.lines.indices.contains(lineBefore) {
+                // The line we were just reading is confirmed finished --
+                // pair its accumulated raw-Y average with its true center
+                // and refit. Mirrors app.js's finishCurrentLine().
+                dynamicY.finishLine(trueY: layout.lines[lineBefore].yCenter)
+            } else {
+                // Line changed via a huge-jump or forced relocation, not a
+                // clean read of the old line -- discard rather than pair,
+                // so a jump-tainted average never poisons the regression.
+                dynamicY.discardCurrentLine()
+            }
+        }
+
         updateHUD(zcut: zcut)
     }
 
@@ -183,6 +315,7 @@ final class AppModel: ObservableObject {
         lines.append("Z-cut: \(st.zcutDiag.reason)")
         lines.append(String(format: "huge-jump %.0f / %.0fpx (k=%.0f)", st.hugeDbg.dist, st.hugeDbg.thresh, JUMP_K))
         lines.append("last advance: \(st.lineAdvancedBy.rawValue)")
+        lines.append(String(format: "Y-calib k=%.2f b=%.0f (n=%d pairs)", dynamicY.k, dynamicY.b, dynamicY.pairs.count))
         hudLines = lines
 
         if zcut {

@@ -20,11 +20,13 @@ struct ContentView: View {
                         .frame(width: rootGeo.size.width, height: rootGeo.size.height)
                 case .calibrating:
                     CalibrationView(model: model, rootSize: rootGeo.size)
+                case .accuracyCheck:
+                    AccuracyCheckView(model: model, rootSize: rootGeo.size)
                 case .reading:
                     ReadingView(model: model)
                 }
 
-                if model.phase == .reading {
+                if model.phase == .reading || model.phase == .accuracyCheck {
                     if let raw = model.rawPoint {
                         Circle()
                             .fill(Color(red: 0.937, green: 0.267, blue: 0.267).opacity(0.85))
@@ -40,6 +42,9 @@ struct ContentView: View {
                             .allowsHitTesting(false)
                     }
                 }
+            }
+            .onAppear {
+                model.ensureLayoutBuilt(width: rootGeo.size.width)
             }
         }
         .coordinateSpace(name: "root")

@@ -81,14 +81,26 @@ final class LayoutModel: ObservableObject {
     private(set) var readOrder: [Int] = []
     private(set) var builtWidth: CGFloat = 0
 
-    let font: UIFont
+    @Published private(set) var font: UIFont
     let xPad: CGFloat
     let yPad: CGFloat
+
+    static let minFontSize: CGFloat = 18
+    static let maxFontSize: CGFloat = 60
 
     init(font: UIFont, xPad: CGFloat = 20, yPad: CGFloat = 28) {
         self.font = font
         self.xPad = xPad
         self.yPad = yPad
+    }
+
+    /// Swaps in a same-family font at a new point size and immediately
+    /// re-lays-out the passage at whatever width it was last built with
+    /// (a no-op until `build(width:)` has run once).
+    func setFontSize(_ size: CGFloat) {
+        let clamped = min(max(size, Self.minFontSize), Self.maxFontSize)
+        font = font.withSize(clamped)
+        if builtWidth > 1 { build(width: builtWidth) }
     }
 
     /// SwiftUI-side equivalent of `font`, built from the same name/size so
