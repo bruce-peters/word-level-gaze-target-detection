@@ -15,9 +15,10 @@ struct WelcomeView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 numbered(1, "Allow camera access. Nothing leaves this device.")
-                numbered(2, "Hold your finger on each of the 9 dots for about a second while looking directly at it.")
-                numbered(3, "Just read. Tracking starts automatically once calibration is done.")
-                numbered(4, "Double-tap any word any time to jump the reading position there by hand.")
+                numbered(2, "Follow the moving dot with just your eyes for about 15 seconds -- keep your head still.")
+                numbered(3, "Stare at one more dot for a few seconds to measure your gaze noise.")
+                numbered(4, "Just read. Tracking starts automatically once that's done.")
+                numbered(5, "Double-tap any word any time to jump the reading position there by hand.")
             }
 
             if !ARGazeEstimator.isSupported {

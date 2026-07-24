@@ -14,15 +14,8 @@ enum AppPhase {
     case reading
 }
 
-/// The 9 calibration targets, as fractions of screen size -- identical
-/// layout to ui/overlays.py's TARGET_XF / TARGET_YF.
-let CALIB_TARGET_XF: [CGFloat] = [0.1, 0.5, 0.9]
-let CALIB_TARGET_YF: [CGFloat] = [0.12, 0.5, 0.88]
-
 final class AppModel: ObservableObject {
     @Published var phase: AppPhase = .welcome
-    @Published var calibDoneIndices: Set<Int> = []
-    @Published var calibActiveIndex: Int? = nil
     @Published var calibError: String? = nil
 
     @Published var rawPoint: CGPoint? = nil
@@ -44,8 +37,12 @@ final class AppModel: ObservableObject {
     let tracker: Tracker
     let dynamicY = DynamicYCalibrator()
 
-    private var capturing = false
-    private var activeScreenPoint: CGPoint? = nil
+    /// Updated every animation frame by the pursuit-calibration dot as it
+    /// moves; `pursuitActive` flips true once the view has sent its first
+    /// point, so `handleSample` doesn't pair early samples with the (0,0)
+    /// default before the dot has actually started moving.
+    private var pursuitActive = false
+    private var pursuitTargetPoint: CGPoint = .zero
 
     private var accuracySamples: [CGPoint] = []
     private var accuracyTargetPoint: CGPoint = .zero
@@ -58,8 +55,6 @@ final class AppModel: ObservableObject {
     /// space before hitting the Tracker -- the same viewport-vs-document
     /// distinction app.js/app_window.py handle via scrollY/canvasy().
     private(set) var contentOrigin: CGPoint = .zero
-
-    var calibrationComplete: Bool { calibDoneIndices.count >= CALIB_TARGET_XF.count * CALIB_TARGET_YF.count }
 
     init() {
         let font = UIFont(name: "Georgia", size: 30) ?? UIFont.systemFont(ofSize: 30)
@@ -82,7 +77,7 @@ final class AppModel: ObservableObject {
 
     func beginCalibration() {
         calibError = nil
-        calibDoneIndices = []
+        pursuitActive = false
         calibrator.clear()
         dynamicY.reset()
         tracker.state.calibStdPx = nil
@@ -91,6 +86,14 @@ final class AppModel: ObservableObject {
         accuracyReady = false
         gaze.start()
         phase = .calibrating
+    }
+
+    /// Called every animation frame by the pursuit-calibration dot as it
+    /// moves, so `handleSample` knows what screen point the user is
+    /// (presumably) looking at right now.
+    func updatePursuitTarget(_ point: CGPoint) {
+        pursuitTargetPoint = point
+        pursuitActive = true
     }
 
     /// Builds the passage layout as soon as the screen size is known, so
@@ -107,28 +110,15 @@ final class AppModel: ObservableObject {
         layout.setFontSize(size)
     }
 
-    func beginCapture(pointIndex: Int, at screenPoint: CGPoint) {
-        calibActiveIndex = pointIndex
-        activeScreenPoint = screenPoint
-        capturing = true
-    }
-
-    func endCapture() {
-        capturing = false
-        activeScreenPoint = nil
-        calibActiveIndex = nil
-    }
-
-    func markPointDone(_ idx: Int) {
-        calibDoneIndices.insert(idx)
-    }
-
+    /// Called once the pursuit dot finishes its path. Fits the calibration
+    /// on whatever samples were collected along the way; on failure the
+    /// caller (CalibrationView) offers a retry that restarts the same dot
+    /// animation from scratch.
     func finishCalibration() {
         do {
             try calibrator.fit()
         } catch {
-            calibError = "Not enough gaze samples were captured. Hold each dot a little longer, keep your face in frame, then try again."
-            calibDoneIndices = []
+            calibError = "Not enough gaze samples were captured -- keep your face in frame and try to keep your eyes on the dot the whole time, then try again."
             calibrator.clear()
             return
         }
@@ -216,7 +206,7 @@ final class AppModel: ObservableObject {
         gaze.stop()
         calibrator.clear()
         dynamicY.reset()
-        calibDoneIndices = []
+        pursuitActive = false
         rawPoint = nil
         filteredPoint = nil
         accuracyResultText = nil
@@ -257,11 +247,12 @@ final class AppModel: ObservableObject {
     // MARK: - sample pipeline
 
     private func handleSample(_ sample: GazeSample) {
-        if capturing, let pt = activeScreenPoint {
-            calibrator.addSample(pitch: sample.pitch, yaw: sample.yaw, screenX: Double(pt.x), screenY: Double(pt.y))
+        if phase == .calibrating, pursuitActive {
+            calibrator.addSample(gx: sample.gx, gy: sample.gy,
+                                  screenX: Double(pursuitTargetPoint.x), screenY: Double(pursuitTargetPoint.y))
         }
 
-        guard calibrator.isFitted, let raw = calibrator.predict(pitch: sample.pitch, yaw: sample.yaw) else { return }
+        guard calibrator.isFitted, let raw = calibrator.predict(gx: sample.gx, gy: sample.gy) else { return }
         rawPoint = raw
 
         if phase == .accuracyCheck, accuracyActive {

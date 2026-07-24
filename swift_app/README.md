@@ -28,11 +28,24 @@ the **per-eye transforms** ARKit already computes for you
 head pose alone, since it's ARKit's own estimate of each eyeball's orientation, not just where
 the head is pointed. See `Gaze/ARGazeEstimator.swift`.
 
-Those per-eye transforms are turned into a `(pitch, yaw)` angle pair (in camera space), which
-feeds into the exact same 9-point linear-regression calibration the Python app uses for its
-head-pose features (`Gaze/Calibrator.swift`, ported from `python_app/gaze/calibration.py`) —
-so any fixed sign/axis convention in how pitch/yaw were derived just becomes a regression
-coefficient; it doesn't need to be geometrically exact.
+**Why it's (reasonably) robust to head movement.** The first version of this estimator used
+only gaze *angle* (pitch/yaw relative to the camera) — but angle alone can't tell "same angle,
+head moved 5cm sideways" apart from "head still, eyes moved," even though those land on very
+different screen points. Fixed-angle calibration only holds for the head position it was
+calibrated at. The estimator now uses each eye's **position**, not just its direction: it
+intersects the eye's gaze ray with the camera's own image plane (`ARGazeEstimator.gazeScreenRay`),
+which is a good approximation of the screen surface since the front TrueDepth camera sits
+essentially flush with the glass. That intersection point is translation-aware by construction,
+so head movement is handled geometrically instead of needing to be baked into a single frozen
+linear fit. The `(gx, gy)` result (in meters, camera-local space) still feeds into the same
+kind of small linear-regression calibration the Python app uses for its head-pose features
+(`Gaze/Calibrator.swift`, ported from `python_app/gaze/calibration.py`) — now that job is just
+to learn the small residual offset between the camera's image plane and the actual visible
+screen rectangle, not to compensate for head position at all.
+
+This is still an approximation (screen ≈ camera's own Z=0 plane; no per-device camera-to-screen
+offset lookup), so don't expect pixel-perfect stability across a foot of head travel — but it
+should hold up through normal reading posture shifts far better than angle-only ever could.
 
 ## File map
 
@@ -44,19 +57,20 @@ WordGazeAR/
     LayoutModel.swift         passage text, word/line/sentence layout   (ports reading/layout.py)
     Tracker.swift              Z-cut + huge-jump state machine           (ports reading/tracker.py)
   Gaze/
-    ARGazeEstimator.swift      ARKit session + eye-transform -> pitch/yaw   (new: no python equivalent)
-    Calibrator.swift            pitch/yaw -> screen point, linear regression (ports gaze/calibration.py)
-    OneEuroFilter.swift          smoothing + forward prediction              (ports gaze/calibration.py)
-    DynamicYCalibrator.swift     rolling Y' = k*Y+b refit on every Z-cut      (ports app.js §4)
+    ARGazeEstimator.swift      ARKit session + eye ray/screen-plane intersection -> (gx,gy)  (new: no python equivalent)
+    Calibrator.swift            (gx,gy) -> screen point, linear regression      (ports gaze/calibration.py)
+    OneEuroFilter.swift          smoothing + forward prediction                  (ports gaze/calibration.py)
+    DynamicYCalibrator.swift     rolling Y' = k*Y+b refit on every Z-cut          (ports app.js §4)
   Views/
     ContentView.swift          phase switch + shared gaze-dot overlay
     WelcomeView.swift
-    CalibrationView.swift      9-point hold-to-calibrate
+    CalibrationView.swift      smooth-pursuit dot-following calibration
     AccuracyCheckView.swift     final stare-at-a-dot step, measures noise σ
     SettingsView.swift          font size (+ read-only calibration diagnostics)
     ReadingView.swift           passage + top bar + HUD, scroll-aware
     WordView.swift               single word, highlight state
     HUDView.swift                debug panel
+    PillButtonStyle.swift        shared button chrome
 ```
 
 ## Requirements
@@ -89,8 +103,12 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
 ## Using it
 
 1. **Welcome screen** → "Start calibration".
-2. Hold your finger on each of the 9 red dots for about a second **while looking directly at
-   it**; it turns green when done. All 9 → "Finish calibration".
+2. **Follow the moving dot with your eyes** for about 15 seconds — no tapping, no holding
+   anything, just track it while keeping your head still. It sweeps a smooth Lissajous path
+   across the whole screen; every gaze sample along the way is paired with the dot's position
+   at that instant, so this one pass produces far more calibration data than a handful of
+   discrete clicks would. If it can't get a good fit (e.g. you looked away partway through),
+   it'll tell you and offer **Retry**, which restarts the same path from the beginning.
 3. **Accuracy check**: stare at the single green dot for ~3 seconds without moving your head.
    This measures your gaze noise (mean error + standard deviation) and feeds the std-dev into
    `Tracker.state.calibStdPx`, which sets the huge-jump threshold (`JUMP_K × σ`) to *your*
@@ -107,7 +125,7 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
 7. Double-tap any word to force the reading position there by hand.
 8. "Settings" lets you change the passage font size (re-flows the layout live) and shows the
    measured calibration noise/error read-only. "Reset" restarts tracking from the top;
-   "Recalibrate" redoes the whole 9-point calibration + accuracy check (useful if you moved the
+   "Recalibrate" redoes the whole pursuit calibration + accuracy check (useful if you moved the
    device or your head position changed a lot — this also resets the dynamic-Y regression).
 
 The bottom-right HUD mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump

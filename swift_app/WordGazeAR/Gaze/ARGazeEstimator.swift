@@ -8,18 +8,33 @@
 // signal than head pose alone -- it is ARKit's own estimate of each eyeball's
 // orientation, not just where the head is pointed.
 //
+// v2: uses eye POSITION, not just angle. An angle-only estimate (pitch/yaw
+// of the gaze direction relative to the camera) cannot tell "same angle,
+// head moved 5cm sideways" apart from "head still, eyes moved" -- those are
+// very different screen points, but a fixed linear fit on angle alone
+// conflates them, so accuracy degrades badly whenever the head moves after
+// calibration. Instead, each eye's position AND direction (both relative to
+// the camera) are used to intersect the gaze ray with the camera's own
+// image plane (Z=0 in camera-local space -- the front TrueDepth camera sits
+// essentially flush with the screen glass, so this is a good approximation
+// of the screen surface). That intersection point already accounts for
+// head translation geometrically; only what's left over (the small, mostly
+// fixed offset between the camera and the actual visible screen rectangle)
+// needs to be learned by the linear calibration on top of it.
+//
 // Pipeline per frame:
 //   1. worldEyeTransform = faceAnchor.transform * eyeTransform  (face-local -> world)
-//   2. gaze direction (world) = average of both eyes' forward axis
-//   3. rotate that direction into the camera's own frame (removes device/
-//      head translation, leaves only the angle that matters)
-//   4. reduce to two scalars: pitch (up/down) and yaw (left/right)
+//   2. average both eyes' position and forward direction -> world-space ray
+//   3. rotate + translate that ray into the camera's own frame
+//   4. intersect the ray with the camera's Z=0 plane -> (gx, gy) in meters
 //
-// pitch/yaw are exactly the feature pair gaze/calibration.py's Calibrator
-// already expects, so the same 9-point linear-regression calibration
-// (Calibrator.swift) maps them to screen points. Note the exact sign
-// convention chosen for "forward" below is not load-bearing: a flipped axis
-// just becomes a negative regression coefficient after calibration.
+// (gx, gy) is the feature pair Calibrator does a 9-point-equivalent linear
+// fit against. Note the exact sign convention chosen for "forward" is not
+// load-bearing for calibration itself (a flipped axis just becomes a
+// negative regression coefficient) -- but it does matter for the ray/plane
+// intersection's direction of travel, so `resolveForwardSign` below
+// self-corrects at runtime rather than assuming a specific ARKit axis
+// convention.
 
 import ARKit
 import Combine
@@ -27,16 +42,17 @@ import QuartzCore
 import Foundation
 
 struct GazeSample {
-    let pitch: Double
-    let yaw: Double
+    /// Ray/screen-plane intersection point, in meters, in camera-local
+    /// space -- NOT an angle. See file header. Small numbers (roughly
+    /// -0.05...0.05) for ordinary head positions.
+    let gx: Double
+    let gy: Double
     let timestampMs: Double
 }
 
 final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
     @Published var isRunning = false
     @Published var lastError: String? = nil
-    @Published var latestPitch: Double = 0
-    @Published var latestYaw: Double = 0
     @Published var faceVisible = false
 
     /// Called on the main thread for every face-tracking frame that yields a
@@ -79,7 +95,7 @@ final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
             DispatchQueue.main.async { self.faceVisible = false }
             return
         }
-        guard let (pitch, yaw) = Self.gazePitchYaw(faceAnchor: faceAnchor, camera: frame.camera) else {
+        guard let (gx, gy) = Self.gazeScreenRay(faceAnchor: faceAnchor, camera: frame.camera) else {
             return
         }
 
@@ -87,9 +103,7 @@ final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
 
         DispatchQueue.main.async {
             self.faceVisible = true
-            self.latestPitch = pitch
-            self.latestYaw = yaw
-            self.onSample?(GazeSample(pitch: pitch, yaw: yaw, timestampMs: nowMs))
+            self.onSample?(GazeSample(gx: gx, gy: gy, timestampMs: nowMs))
         }
     }
 
@@ -103,32 +117,63 @@ final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - eye-transform math
 
-    /// Combines both eyes' ARKit transforms into a single gaze pitch/yaw,
-    /// expressed relative to the camera (i.e. the device), in radians.
-    static func gazePitchYaw(faceAnchor: ARFaceAnchor, camera: ARCamera) -> (pitch: Double, yaw: Double)? {
+    /// Reject intersections implying a preposterous viewing distance --
+    /// either a numerically unstable near-parallel ray, or a convention/
+    /// tracking glitch. Ordinary phone viewing distance is ~0.25-0.6m.
+    private static let minRayDistance = 0.05
+    private static let maxRayDistance = 2.0
+
+    /// Combines both eyes' ARKit transforms into a single ray/screen-plane
+    /// intersection point, in meters, in camera-local space.
+    static func gazeScreenRay(faceAnchor: ARFaceAnchor, camera: ARCamera) -> (gx: Double, gy: Double)? {
         let leftWorld = faceAnchor.transform * faceAnchor.leftEyeTransform
         let rightWorld = faceAnchor.transform * faceAnchor.rightEyeTransform
 
-        // Each eye transform's local -Z axis (its 3rd column, negated) is the
-        // direction that eye is pointing, expressed in world space.
+        // Eye position (world): each transform's translation column.
+        let leftPos = leftWorld.columns.3.xyz
+        let rightPos = rightWorld.columns.3.xyz
+        let posWorld = (leftPos + rightPos) * 0.5
+
+        // Eye direction (world): each transform's local -Z axis (ARKit's
+        // universal "forward" convention for oriented transforms).
         let leftDir = -leftWorld.columns.2.xyz
         let rightDir = -rightWorld.columns.2.xyz
-        let combined = leftDir + rightDir
-        guard simd_length(combined) > 1e-6 else { return nil }
-        let dirWorld = simd_normalize(combined)
+        let dirWorldSum = leftDir + rightDir
+        guard simd_length(dirWorldSum) > 1e-6 else { return nil }
+        let dirWorld = simd_normalize(dirWorldSum)
 
-        // Rotate into camera space so the angle is relative to the device,
-        // not to wherever ARKit's world origin happened to start.
+        // Into camera-local space: position needs the translation (w=1),
+        // direction must not (w=0).
         let cameraInverse = camera.transform.inverse
+        let posWorld4 = SIMD4<Float>(posWorld.x, posWorld.y, posWorld.z, 1)
         let dirWorld4 = SIMD4<Float>(dirWorld.x, dirWorld.y, dirWorld.z, 0)
-        let dirCameraVec = (cameraInverse * dirWorld4).xyz
-        guard simd_length(dirCameraVec) > 1e-6 else { return nil }
-        let dirCamera = simd_normalize(dirCameraVec)
+        let posCamera = (cameraInverse * posWorld4).xyz
+        let dirCameraRaw = simd_normalize((cameraInverse * dirWorld4).xyz)
 
-        // Camera looks down its own -Z; yaw = left/right angle, pitch = up/down.
-        let yaw = Double(atan2(dirCamera.x, -dirCamera.z))
-        let pitch = Double(atan2(dirCamera.y, -dirCamera.z))
-        return (pitch, yaw)
+        guard let (t, dirCamera) = resolveForwardSign(pos: posCamera, dir: dirCameraRaw) else {
+            return nil
+        }
+
+        let ix = posCamera.x + t * dirCamera.x
+        let iy = posCamera.y + t * dirCamera.y
+        guard ix.isFinite, iy.isFinite else { return nil }
+        return (gx: Double(ix), gy: Double(iy))
+    }
+
+    /// Finds the forward-in-time (t > 0) intersection of the eye ray with
+    /// the camera's Z=0 plane, self-correcting the direction's sign so this
+    /// doesn't depend on nailing ARKit's undocumented axis convention by
+    /// hand: whichever sign of `dir` produces a positive, sane-magnitude
+    /// `t` is treated as "toward the screen."
+    private static func resolveForwardSign(pos: SIMD3<Float>, dir: SIMD3<Float>) -> (t: Float, dir: SIMD3<Float>)? {
+        for candidate in [dir, -dir] {
+            guard abs(candidate.z) > 1e-4 else { continue }
+            let t = -pos.z / candidate.z
+            if t > Float(minRayDistance), t < Float(maxRayDistance) {
+                return (t, candidate)
+            }
+        }
+        return nil
     }
 }
 

@@ -1,25 +1,26 @@
-// Fits screenX ~= a*pitch + b*yaw + c and screenY ~= d*pitch + e*yaw + f
-// from 9-point tap calibration data, exactly mirroring gaze/calibration.py's
+// Fits screenX ~= a*gx + b*gy + c and screenY ~= d*gx + e*gy + f from
+// pursuit-calibration samples, exactly mirroring gaze/calibration.py's
 // Calibrator (which itself replaced WebGazer's internal ridge regression
-// after switching to a head-pose-relative feature pair). Here the features
-// are pitch/yaw of the gaze direction derived from ARKit's per-eye
-// transforms (see ARGazeEstimator) rather than a pose-estimation model, but
-// the fit -- and therefore the rest of the pipeline -- is identical: any
-// fixed sign/axis convention in how pitch/yaw were derived is just another
-// linear term the regression absorbs.
+// after switching to a head-pose-relative feature pair). The features here
+// are (gx, gy) -- ARKit's eye-ray/screen-plane intersection point in meters
+// (see ARGazeEstimator), already translation-aware, so this fit only has to
+// learn the small residual offset/scale between the camera's own image
+// plane and the actual visible screen rectangle. It's deliberately generic
+// on the feature names: any two roughly-linear predictors of screen
+// position would work here.
 
 import simd
 import CoreGraphics
 
 final class Calibrator {
-    private(set) var samples: [(pitch: Double, yaw: Double, x: Double, y: Double)] = []
+    private(set) var samples: [(gx: Double, gy: Double, x: Double, y: Double)] = []
     private var coefX: SIMD3<Double>? = nil  // (a, b, c)
     private var coefY: SIMD3<Double>? = nil  // (d, e, f)
 
     var isFitted: Bool { coefX != nil && coefY != nil }
 
-    func addSample(pitch: Double, yaw: Double, screenX: Double, screenY: Double) {
-        samples.append((pitch, yaw, screenX, screenY))
+    func addSample(gx: Double, gy: Double, screenX: Double, screenY: Double) {
+        samples.append((gx, gy, screenX, screenY))
     }
 
     func clear() {
@@ -32,7 +33,7 @@ final class Calibrator {
 
     /// Ordinary least squares via the normal equations: solve (AᵀA) c = Aᵀb
     /// for each of screenX and screenY, sharing the same AᵀA. A's rows are
-    /// [pitch, yaw, 1].
+    /// [gx, gy, 1].
     func fit() throws {
         guard samples.count >= 6 else { throw FitError.notEnoughSamples }
 
@@ -41,7 +42,7 @@ final class Calibrator {
         var atbY = SIMD3<Double>.zero
 
         for s in samples {
-            let row = SIMD3<Double>(s.pitch, s.yaw, 1)
+            let row = SIMD3<Double>(s.gx, s.gy, 1)
             ata += outer(row, row)
             atbX += row * s.x
             atbY += row * s.y
@@ -54,9 +55,9 @@ final class Calibrator {
         coefY = inv * atbY
     }
 
-    func predict(pitch: Double, yaw: Double) -> CGPoint? {
+    func predict(gx: Double, gy: Double) -> CGPoint? {
         guard let cx = coefX, let cy = coefY else { return nil }
-        let row = SIMD3<Double>(pitch, yaw, 1)
+        let row = SIMD3<Double>(gx, gy, 1)
         return CGPoint(x: dot(cx, row), y: dot(cy, row))
     }
 }
