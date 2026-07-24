@@ -15,6 +15,18 @@ A simple Swift/ARKit port of the word-level gaze reader in [`web_app/`](../web_a
   (`Y' = k·Y + b`) is refit, correcting slow vertical drift with zero user effort. Ported from
   `app.js`'s `fitRegression()`/`calibrateY()`/`finishCurrentLine()` (`CODE_STUDY.md` §4) —
   see `Gaze/DynamicYCalibrator.swift`.
+- **Dynamic-X calibration** — the horizontal counterpart, and the "highest-value follow-up"
+  `IMPROVING_LINE_JUMPS.md` recommended and never built. X sweeps across most of a line while
+  reading it, so instead of one average per line, this pairs the raw-X *extremes* reached
+  while reading a line against that line's true `xMin`/`xMax` on every Z-cut. Corrects the
+  horizontal compression that's the documented root cause of the Z-cut not firing, and also
+  improves word-within-line assignment (same corrected X feeds both). See
+  `Gaze/DynamicXCalibrator.swift`; both dynamic calibrators share their rolling-OLS core,
+  `Gaze/RollingLinearFit.swift`.
+- **Read-trail highlighting** — every word up to the furthest point reached stays subtly
+  tinted, distinct from the current line/word highlight. This is the paper's actual headline
+  feature ("See Where You Read") — the mechanisms above exist to keep this trail accurate, but
+  it was missing from the initial port; see `Views/WordView.swift`.
 
 Left out on purpose: the error-vector-cloud model and LLM-assisted jump election — see
 `CODE_STUDY.md` at the repo root for what those do, if you want to add them back later.
@@ -60,7 +72,9 @@ WordGazeAR/
     ARGazeEstimator.swift      ARKit session + eye ray/screen-plane intersection -> (gx,gy)  (new: no python equivalent)
     Calibrator.swift            (gx,gy) -> screen point, linear regression      (ports gaze/calibration.py)
     OneEuroFilter.swift          smoothing + forward prediction                  (ports gaze/calibration.py)
+    RollingLinearFit.swift        shared rolling-OLS core for both dynamic calibrators
     DynamicYCalibrator.swift     rolling Y' = k*Y+b refit on every Z-cut          (ports app.js §4)
+    DynamicXCalibrator.swift     rolling X' = k*X+b refit on every Z-cut          (new: app.js never had this)
   Views/
     ContentView.swift          phase switch + shared gaze-dot overlay
     WelcomeView.swift
@@ -68,7 +82,7 @@ WordGazeAR/
     AccuracyCheckView.swift     final stare-at-a-dot step, measures noise σ
     SettingsView.swift          font size (+ read-only calibration diagnostics)
     ReadingView.swift           passage + top bar + HUD, scroll-aware
-    WordView.swift               single word, highlight state
+    WordView.swift               single word, line/word/read-trail highlight state
     HUDView.swift                debug panel
     PillButtonStyle.swift        shared button chrome
 ```
@@ -115,10 +129,11 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
    measured noise instead of a generic fallback. Tap "Start reading" once it reports a result.
 4. Reading view starts automatically. The green dot is your filtered/predicted gaze; the red
    dot is the raw prediction. The current line is dimly highlighted, the current word is
-   highlighted brighter.
+   highlighted brighter, and every word you've already passed stays faintly tinted (the
+   read-trail) — so a line jump never leaves you unsure where you were.
 5. Read a line left→right, then sweep your eyes back to the start of the next line — that
-   return sweep is the Z-cut that advances `currentLine`, and also feeds that line's average
-   raw gaze Y into the dynamic-Y regression (see HUD `Y-calib` row).
+   return sweep is the Z-cut that advances `currentLine`, and also feeds that line's raw X/Y
+   into the dynamic-X/Y regressions (see HUD `X-calib`/`Y-calib` rows).
 6. Look away for a sustained stretch (e.g. skip to a different sentence) and it'll relocate to
    the nearest sentence start once the deviation is large and sustained enough (the huge-jump
    path) — tune via `JUMP_K` in `Tracker.swift` if it's too eager/reluctant.
@@ -126,12 +141,12 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
 8. "Settings" lets you change the passage font size (re-flows the layout live) and shows the
    measured calibration noise/error read-only. "Reset" restarts tracking from the top;
    "Recalibrate" redoes the whole pursuit calibration + accuracy check (useful if you moved the
-   device or your head position changed a lot — this also resets the dynamic-Y regression).
+   device or your head position changed a lot — this also resets both dynamic regressions).
 
 The bottom-right HUD mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump
-distance vs. threshold, last-advance reason, and the dynamic-Y regression's current `k`/`b`
-and pair count, so you can see *why* a jump did or didn't fire and whether the Y calibration
-is actually learning anything.
+distance vs. threshold, last-advance reason, and both dynamic regressions' current `k`/`b`
+and pair counts, so you can see *why* a jump did or didn't fire and whether the X/Y
+calibrations are actually learning anything.
 
 ## Tuning
 

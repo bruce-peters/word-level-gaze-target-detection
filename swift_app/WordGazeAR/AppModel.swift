@@ -42,6 +42,7 @@ final class AppModel: ObservableObject {
     let layout: LayoutModel
     let tracker: Tracker
     let dynamicY = DynamicYCalibrator()
+    let dynamicX = DynamicXCalibrator()
 
     /// Updated every animation frame by the pursuit-calibration dot as it
     /// moves; `pursuitActive` flips true once the view has sent its first
@@ -87,6 +88,7 @@ final class AppModel: ObservableObject {
         pursuitActive = false
         calibrator.clear()
         dynamicY.reset()
+        dynamicX.reset()
         tracker.state.calibStdPx = nil
         tracker.state.measuredErrPx = nil
         accuracyResultText = nil
@@ -226,6 +228,7 @@ final class AppModel: ObservableObject {
         gaze.stop()
         calibrator.clear()
         dynamicY.reset()
+        dynamicX.reset()
         pursuitActive = false
         rawPoint = nil
         filteredPoint = nil
@@ -258,6 +261,7 @@ final class AppModel: ObservableObject {
     func forceRelocate(wordID: Int) {
         let w = tracker.forceRelocate(wordID: wordID, nowMs: ARGazeEstimator.nowMs())
         dynamicY.discardCurrentLine()
+        dynamicX.discardCurrentLine()
         relocationFlashWordID = w.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             if self?.relocationFlashWordID == w.id { self?.relocationFlashWordID = nil }
@@ -286,27 +290,36 @@ final class AppModel: ObservableObject {
         let contentX = filtered.x - contentOrigin.x
         let contentY = filtered.y - contentOrigin.y
 
-        // Feed this line's raw (pre-dynamic-calibration) Y into the rolling
-        // per-line average *before* asking the tracker to assign a line, so
-        // it's attributed to whichever line was active going into this
-        // sample -- then hand the tracker the dynamic-Y-corrected value.
+        // Feed this line's raw (pre-dynamic-calibration) X/Y into their
+        // rolling accumulators *before* asking the tracker to assign a
+        // line, so they're attributed to whichever line was active going
+        // into this sample -- then hand the tracker the calibrated values.
+        // X's correction matters beyond just the Z-cut: it's the same `gx`
+        // Tracker.processGaze uses for word-within-line assignment too.
         let lineBefore = tracker.state.currentLine
         dynamicY.recordSample(rawY: contentY)
+        dynamicX.recordSample(rawX: contentX)
         let calibratedY = dynamicY.calibrate(contentY)
+        let calibratedX = dynamicX.calibrate(contentX)
 
-        let zcut = tracker.processGaze(gx: contentX, gy: calibratedY, nowMs: sample.timestampMs)
+        let zcut = tracker.processGaze(gx: calibratedX, gy: calibratedY, nowMs: sample.timestampMs)
 
         if tracker.state.currentLine != lineBefore {
             if tracker.state.lineAdvancedBy == .zcut, layout.lines.indices.contains(lineBefore) {
                 // The line we were just reading is confirmed finished --
-                // pair its accumulated raw-Y average with its true center
-                // and refit. Mirrors app.js's finishCurrentLine().
-                dynamicY.finishLine(trueY: layout.lines[lineBefore].yCenter)
+                // pair its accumulated raw X/Y with its true geometry and
+                // refit. Mirrors app.js's finishCurrentLine() (Y) plus the
+                // dynamic-X extension IMPROVING_LINE_JUMPS.md recommended
+                // but never built.
+                let finishedLine = layout.lines[lineBefore]
+                dynamicY.finishLine(trueY: finishedLine.yCenter)
+                dynamicX.finishLine(trueXMin: finishedLine.xMin, trueXMax: finishedLine.xMax)
             } else {
                 // Line changed via a huge-jump or forced relocation, not a
                 // clean read of the old line -- discard rather than pair,
-                // so a jump-tainted average never poisons the regression.
+                // so a jump-tainted average never poisons either fit.
                 dynamicY.discardCurrentLine()
+                dynamicX.discardCurrentLine()
             }
         }
 
@@ -326,7 +339,8 @@ final class AppModel: ObservableObject {
         lines.append("Z-cut: \(st.zcutDiag.reason)")
         lines.append(String(format: "huge-jump %.0f / %.0fpx (k=%.0f)", st.hugeDbg.dist, st.hugeDbg.thresh, JUMP_K))
         lines.append("last advance: \(st.lineAdvancedBy.rawValue)")
-        lines.append(String(format: "Y-calib k=%.2f b=%.0f (n=%d pairs)", dynamicY.k, dynamicY.b, dynamicY.pairs.count))
+        lines.append(String(format: "Y-calib k=%.2f b=%.0f (n=%d)", dynamicY.k, dynamicY.b, dynamicY.pairCount))
+        lines.append(String(format: "X-calib k=%.2f b=%.0f (n=%d)", dynamicX.k, dynamicX.b, dynamicX.pairCount))
         hudLines = lines
 
         if zcut {

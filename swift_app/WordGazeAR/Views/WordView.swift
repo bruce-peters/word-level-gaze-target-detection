@@ -1,6 +1,9 @@
 // Renders a single passage word at its pre-computed layout position, with
-// line/word highlight state read from the shared Tracker.state -- mirrors
-// updateHighlights()/paintWord() in app.js and app_window.py's _paint_word.
+// line/word/read-trail highlight state read from the shared Tracker.state.
+// Mirrors updateHighlights()/paintReadTrail() in app.js and
+// app_window.py's _paint_word -- the read-trail is the paper's central
+// "See Where You Read" payoff: every word up to the furthest point reached
+// stays tinted, so a line jump never loses your place.
 
 import SwiftUI
 
@@ -11,11 +14,12 @@ struct WordView: View {
     let font: Font
     let onDoubleTap: () -> Void
 
-    private enum Level { case none, line, word }
+    private enum Level { case none, readTrail, line, word }
 
     private var level: Level {
         if word.id == state.currentWordID { return .word }
         if word.lineIndex == state.currentLine { return .line }
+        if word.orderIndex <= state.maxOrderReached { return .readTrail }
         return .none
     }
 
@@ -36,6 +40,7 @@ struct WordView: View {
         switch level {
         case .word: return Color(red: 0.961, green: 0.62, blue: 0.043)
         case .line: return Color(red: 0.118, green: 0.161, blue: 0.231)
+        case .readTrail: return Color(red: 0.118, green: 0.161, blue: 0.231).opacity(0.35)
         case .none: return .clear
         }
     }
