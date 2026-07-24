@@ -14,6 +14,12 @@ enum AppPhase {
     case reading
 }
 
+/// How long the pursuit-calibration dot takes for one lap. Shared between
+/// AppModel (which schedules the actual completion timer) and
+/// CalibrationView (which animates the dot over the same span), so the two
+/// can't drift out of sync.
+let PURSUIT_DURATION: Double = 16.0
+
 final class AppModel: ObservableObject {
     @Published var phase: AppPhase = .welcome
     @Published var calibError: String? = nil
@@ -43,6 +49,7 @@ final class AppModel: ObservableObject {
     /// default before the dot has actually started moving.
     private var pursuitActive = false
     private var pursuitTargetPoint: CGPoint = .zero
+    private var pursuitToken = UUID()
 
     private var accuracySamples: [CGPoint] = []
     private var accuracyTargetPoint: CGPoint = .zero
@@ -86,6 +93,19 @@ final class AppModel: ObservableObject {
         accuracyReady = false
         gaze.start()
         phase = .calibrating
+
+        // Owns the "when is the pursuit dot done" decision via a plain
+        // timer rather than trying to detect completion from inside
+        // CalibrationView's per-frame TimelineView closure (that relied on
+        // .onChange firing exactly once at the right instant, which turned
+        // out not to be reliable -- this mirrors the already-working
+        // beginAccuracyCheck timer pattern below).
+        let token = UUID()
+        pursuitToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + PURSUIT_DURATION) { [weak self] in
+            guard let self, self.pursuitToken == token, self.phase == .calibrating else { return }
+            self.finishCalibration()
+        }
     }
 
     /// Called every animation frame by the pursuit-calibration dot as it

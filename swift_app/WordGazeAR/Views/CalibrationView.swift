@@ -6,9 +6,12 @@
 // strictly more data than 9 discrete taps: a continuous stream of samples
 // over the whole path instead of a handful of clicks per point.
 //
-// AppModel.updatePursuitTarget(_:) is called every animation frame with the
-// dot's current position; AppModel.handleSample pairs each incoming gaze
-// sample with whatever that target point currently is.
+// This view only drives the dot's visuals and continuously reports its
+// position via AppModel.updatePursuitTarget(_:); AppModel.beginCalibration()
+// owns the actual "when is one lap done" decision via a plain timer rather
+// than this view trying to detect completion itself from inside a
+// per-frame TimelineView closure (that was tried first and wasn't a
+// reliable way to catch a one-shot transition -- see git history).
 
 import SwiftUI
 import Foundation
@@ -17,18 +20,20 @@ struct CalibrationView: View {
     @ObservedObject var model: AppModel
     let rootSize: CGSize
 
-    /// One full lap of the path, in seconds. Slow enough for smooth pursuit
-    /// (not saccades) to keep up with the dot.
-    private let duration: Double = 16.0
-
     @State private var startDate = Date()
-    @State private var finished = false
 
     var body: some View {
         TimelineView(.animation) { context in
             let elapsed = context.date.timeIntervalSince(startDate)
-            let t = min(elapsed / duration, 1.0)
+            let t = min(elapsed / PURSUIT_DURATION, 1.0)
             let point = Self.pursuitPoint(t: t, size: rootSize)
+            // `let _ =` (not a bare statement) so this side effect reliably
+            // runs every frame regardless of @ViewBuilder's handling of
+            // plain statements -- this is what actually keeps AppModel's
+            // pursuitTargetPoint in sync with the dot; don't rely on
+            // .onChange(of:) here, it isn't a dependable one-shot/edge
+            // trigger inside a per-frame TimelineView closure.
+            let _ = reportTarget(point)
 
             ZStack(alignment: .topLeading) {
                 infoPanel(progress: t)
@@ -42,22 +47,18 @@ struct CalibrationView: View {
                     .zIndex(1)
             }
             .frame(width: rootSize.width, height: rootSize.height)
-            .onChange(of: point) { newPoint in
-                guard model.calibError == nil else { return }
-                model.updatePursuitTarget(newPoint)
-                if t >= 1.0, !finished {
-                    finished = true
-                    model.finishCalibration()
-                }
-            }
         }
         .onAppear { restart() }
     }
 
     private func restart() {
         startDate = Date()
-        finished = false
         model.beginCalibration()
+    }
+
+    private func reportTarget(_ point: CGPoint) {
+        guard model.calibError == nil else { return }
+        model.updatePursuitTarget(point)
     }
 
     private func infoPanel(progress: Double) -> some View {
