@@ -9,9 +9,20 @@ enum PassageDifficulty: String, Codable, CaseIterable, Identifiable {
     case easy
     case medium
     case long
+    case hard
+    case extraHard = "extra_hard"
 
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+
+    var label: String {
+        switch self {
+        case .easy: return "Easy"
+        case .medium: return "Medium"
+        case .long: return "Long"
+        case .hard: return "Hard"
+        case .extraHard: return "Extra Hard"
+        }
+    }
 }
 
 struct Passage: Codable, Identifiable, Equatable {
