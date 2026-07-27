@@ -212,11 +212,15 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
     outside of an actual data-collection session. Off by default; toggles back to "Hide Debug".
 11. **"Finish"** ends the session, saves it locally, attempts the Supabase upload, and shows the
     summary screen (duration, longest dwell times, upload status). **"Watch reading replay
-    (3x)"** plays back the just-recorded fixation trail at 3x speed — each word highlights for
-    its recorded dwell time ÷ 3, auto-scrolling to follow — so you can quickly sanity-check how
-    well tracking actually followed the participant, without re-reading the whole passage in
-    real time. "Skip" bails out immediately; it also finishes on its own once the trail runs
-    out. "Done" returns to the home screen with the participant fields prefilled, ready for the
+    (3x)"** (`Views/ReplayView.swift`) plays back the just-recorded fixation trail at 3x speed —
+    each word highlights for its recorded dwell time ÷ 3, auto-scrolling to follow — with the
+    raw gaze dot (the same red dot from `showDebugOverlay`, replayed from
+    `SessionRecorder.gazeTrail` at the same 3x rate) moving alongside it, so you can quickly
+    sanity-check how well tracking actually followed the participant, without re-reading the
+    whole passage in real time. `gazeTrail` is only ever held in memory for this — it's not part
+    of `ReadingSessionPayload`, so it never gets persisted or uploaded. "Skip" bails out
+    immediately; it also finishes on its own once the trail runs out. "Done" returns to the home
+    screen with the participant fields prefilled, ready for the
     next passage.
 
 ## Tuning

@@ -11,8 +11,22 @@
 
 import Foundation
 
+/// One raw gaze point for ReplayView's dot overlay -- content-space (same
+/// coordinate system as Word.xCenter/yCenter), not screen space. Purely a
+/// client-side debugging aid: kept on SessionRecorder for the lifetime of
+/// the just-finished session (until the next start(nowMs:) resets it) but
+/// deliberately left out of ReadingSessionPayload -- it's much
+/// higher-resolution than fixations/heatmap and isn't part of the research
+/// data that gets persisted/uploaded.
+struct ReplayGazeSample {
+    let x: Double
+    let y: Double
+    let tMs: Double
+}
+
 final class SessionRecorder {
     private(set) var fixations: [WordVisit] = []
+    private(set) var gazeTrail: [ReplayGazeSample] = []
     private(set) var startedAt = Date()
 
     private var currentWordID: Int?
@@ -21,10 +35,18 @@ final class SessionRecorder {
 
     func start(nowMs: Double) {
         fixations = []
+        gazeTrail = []
         currentWordID = nil
         currentWordText = ""
         enteredAtMs = nowMs
         startedAt = Date()
+    }
+
+    /// Called every reading-phase frame with the raw (pre-dynamic-calibration)
+    /// gaze point in content space, so ReplayView can redraw the actual dot
+    /// trajectory afterwards.
+    func recordGaze(x: Double, y: Double, nowMs: Double) {
+        gazeTrail.append(ReplayGazeSample(x: x, y: y, tMs: nowMs))
     }
 
     /// Call on every frame (or forced relocation) with the tracker's current

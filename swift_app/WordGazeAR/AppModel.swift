@@ -433,6 +433,12 @@ final class AppModel: ObservableObject {
         let contentX = filtered.x - contentOrigin.x
         let contentY = filtered.y - contentOrigin.y
 
+        // Same content-space conversion, but on the true raw (pre-filter)
+        // point -- i.e. the same "red dot" shown live when showDebugOverlay
+        // is on -- recorded purely so ReplayView can redraw the actual gaze
+        // trajectory after the fact.
+        sessionRecorder.recordGaze(x: Double(raw.x - contentOrigin.x), y: Double(raw.y - contentOrigin.y), nowMs: sample.timestampMs)
+
         // Feed this line's raw (pre-dynamic-calibration) X/Y into their
         // rolling accumulators *before* asking the tracker to assign a
         // line, so they're attributed to whichever line was active going
