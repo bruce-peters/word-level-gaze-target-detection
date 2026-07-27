@@ -7,30 +7,16 @@
 // lay words out manually (no UIKit line-wrapping involved), so the resulting
 // per-word frames are exactly known -- the same ground truth geometry the
 // tracker snaps gaze onto.
+//
+// The passage text itself is no longer a fixed constant -- HomeView lets the
+// tester pick from PassageStore.shared.passages (backed by passages.json),
+// and AppModel.beginSession swaps it in via setText(_:) before the next
+// build(width:).
 
 import UIKit
 import SwiftUI
 import Combine
 import Foundation
-
-let PASSAGE_TEXT =
-    "A Hare was making fun of the Tortoise one day for being so slow. " +
-    "\"Do you ever get anywhere?\" he asked with a mocking laugh. " +
-    "\"Yes,\" replied the Tortoise, \"and I get there sooner than you think. " +
-    "I'll run you a race and prove it.\" " +
-    "The Hare was much amused at the idea of running a race with the " +
-    "Tortoise, but for the fun of the thing he agreed. So the Fox, who had " +
-    "consented to act as judge, marked the distance and started the runners " +
-    "off. " +
-    "The Hare was soon far out of sight, and to make the Tortoise feel very " +
-    "deeply how ridiculous it was for him to try a race with a Hare, he lay " +
-    "down beside the course to take a nap until the Tortoise should catch " +
-    "up. " +
-    "The Tortoise meanwhile kept going slowly but steadily, and, after a " +
-    "time, passed the place where the Hare was sleeping. But the Hare slept " +
-    "on very peacefully; and when at last he did wake up, the Tortoise was " +
-    "near the goal. The Hare now ran his swiftest, but he could not overtake " +
-    "the Tortoise in time."
 
 struct Word: Identifiable {
     let id: Int
@@ -80,6 +66,7 @@ final class LayoutModel: ObservableObject {
     @Published private(set) var sentences: [Sentence] = []
     private(set) var readOrder: [Int] = []
     private(set) var builtWidth: CGFloat = 0
+    private(set) var text: String
 
     @Published private(set) var font: UIFont
     let xPad: CGFloat
@@ -88,10 +75,25 @@ final class LayoutModel: ObservableObject {
     static let minFontSize: CGFloat = 18
     static let maxFontSize: CGFloat = 60
 
-    init(font: UIFont, xPad: CGFloat = 20, yPad: CGFloat = 28) {
+    init(font: UIFont, text: String, xPad: CGFloat = 20, yPad: CGFloat = 28) {
         self.font = font
+        self.text = text
         self.xPad = xPad
         self.yPad = yPad
+    }
+
+    /// Swaps in a new passage. Clears the current layout and resets
+    /// `builtWidth` so the next `build(width:)` call -- already triggered by
+    /// ReadingView's GeometryReader whenever it (re)appears -- re-lays-out
+    /// against the new text instead of reusing stale geometry.
+    func setText(_ newText: String) {
+        guard newText != text else { return }
+        text = newText
+        builtWidth = 0
+        words = []
+        lines = []
+        sentences = []
+        readOrder = []
     }
 
     /// Swaps in a same-family font at a new point size and immediately
@@ -133,7 +135,7 @@ final class LayoutModel: ObservableObject {
         var y = rowYCenters[0]
         var x = xPad
 
-        let tokens = PASSAGE_TEXT.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+        let tokens = text.split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
         for token in tokens {
             let text = String(token)
             let w = widthOf(text)

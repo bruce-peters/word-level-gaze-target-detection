@@ -8,10 +8,19 @@ import Combine
 import Foundation
 
 enum AppPhase {
+    case home
     case welcome
     case calibrating
     case accuracyCheck
     case reading
+    case summary
+}
+
+enum UploadState: Equatable {
+    case idle
+    case uploading
+    case success
+    case failed(String)
 }
 
 /// How long the pursuit-calibration dot takes for one lap. Shared between
@@ -21,8 +30,18 @@ enum AppPhase {
 let PURSUIT_DURATION: Double = 16.0
 
 final class AppModel: ObservableObject {
-    @Published var phase: AppPhase = .welcome
+    @Published var phase: AppPhase = .home
     @Published var calibError: String? = nil
+
+    // MARK: - data-collection session state (home screen, recording, upload)
+
+    let passages: [Passage] = PassageStore.shared.passages
+    @Published var participant: ParticipantInfo? = nil
+    @Published var selectedPassage: Passage? = nil
+    @Published var uploadState: UploadState = .idle
+    @Published var pendingUploadCount: Int = SessionStorage.shared.pendingCount
+    @Published var lastSessionPayload: ReadingSessionPayload? = nil
+    let sessionRecorder = SessionRecorder()
 
     @Published var rawPoint: CGPoint? = nil
     @Published var filteredPoint: CGPoint? = nil
@@ -66,9 +85,10 @@ final class AppModel: ObservableObject {
 
     init() {
         let font = UIFont(name: "Georgia", size: 30) ?? UIFont.systemFont(ofSize: 30)
-        let layoutModel = LayoutModel(font: font)
+        let layoutModel = LayoutModel(font: font, text: passages.first?.text ?? "")
         self.layout = layoutModel
         self.tracker = Tracker(layout: layoutModel)
+        self.selectedPassage = passages.first
 
         gaze.onSample = { [weak self] sample in
             self?.handleSample(sample)
@@ -82,6 +102,19 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: - phase transitions
+
+    /// Called by HomeView's "Continue" button. Stores the participant/
+    /// passage choice, swaps the passage text into the shared LayoutModel
+    /// (re-laid-out the next time ReadingView appears), and moves on to the
+    /// existing welcome/calibration flow.
+    func beginSession(participant: ParticipantInfo, passage: Passage) {
+        self.participant = participant
+        self.selectedPassage = passage
+        layout.setText(passage.text)
+        uploadState = .idle
+        lastSessionPayload = nil
+        phase = .welcome
+    }
 
     func beginCalibration() {
         calibError = nil
@@ -221,6 +254,7 @@ final class AppModel: ObservableObject {
     func startReading() {
         filter.reset()
         tracker.startTracking()
+        sessionRecorder.start(nowMs: ARGazeEstimator.nowMs())
         phase = .reading
     }
 
@@ -242,6 +276,103 @@ final class AppModel: ObservableObject {
         tracker.startTracking()
     }
 
+    // MARK: - finishing & uploading a session
+
+    /// Called by ReadingView's "Finish" button. Stops tracking, flushes the
+    /// session recorder into a payload, saves it locally (always, so the
+    /// data survives even if the upload below fails or there's no network),
+    /// and kicks off a best-effort Supabase upload.
+    func finishReading() {
+        guard let participant, let passage = selectedPassage else { return }
+        gaze.stop()
+        let result = sessionRecorder.finish(nowMs: ARGazeEstimator.nowMs())
+
+        let payload = ReadingSessionPayload(
+            id: UUID(),
+            participantName: participant.name,
+            participantAge: participant.age,
+            readingProficiency: participant.proficiency.rawValue,
+            passageId: passage.id,
+            passageTitle: passage.title,
+            passageDifficulty: passage.difficulty.rawValue,
+            startedAt: result.startedAt,
+            finishedAt: result.finishedAt,
+            durationSeconds: result.finishedAt.timeIntervalSince(result.startedAt),
+            wordCount: layout.words.count,
+            heatmap: result.heatmap,
+            fixations: result.fixations,
+            deviceModel: UIDevice.current.model,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        )
+
+        lastSessionPayload = payload
+        phase = .summary
+
+        // Local save happens unconditionally before the upload attempt --
+        // an upload failure should never be the reason this session's data
+        // is lost.
+        try? SessionStorage.shared.save(payload)
+        pendingUploadCount = SessionStorage.shared.pendingCount
+
+        upload(payload)
+    }
+
+    private func upload(_ payload: ReadingSessionPayload) {
+        uploadState = .uploading
+        Task { [weak self] in
+            do {
+                try await SupabaseClient.shared.insertReadingSession(payload)
+                await MainActor.run {
+                    SessionStorage.shared.markUploaded(payload.id)
+                    self?.pendingUploadCount = SessionStorage.shared.pendingCount
+                    self?.uploadState = .success
+                }
+            } catch {
+                await MainActor.run {
+                    self?.uploadState = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Manual retry button on SessionSummaryView after a failed upload.
+    func retryLastUpload() {
+        guard let payload = lastSessionPayload else { return }
+        upload(payload)
+    }
+
+    /// Retries every session still on disk whose upload never succeeded --
+    /// surfaced as a "N sessions pending upload" row on HomeView.
+    func retryPendingUploads() {
+        for payload in SessionStorage.shared.pendingPayloads() {
+            Task { [weak self] in
+                do {
+                    try await SupabaseClient.shared.insertReadingSession(payload)
+                    await MainActor.run {
+                        SessionStorage.shared.markUploaded(payload.id)
+                        self?.pendingUploadCount = SessionStorage.shared.pendingCount
+                    }
+                } catch {
+                    // Stays pending on disk; the user can retry again later.
+                }
+            }
+        }
+    }
+
+    /// Called by SessionSummaryView's "Done" button. Keeps the participant
+    /// info prefilled -- the same tester often runs several passages back
+    /// to back -- but clears the passage choice and this session's state.
+    func returnHomeAfterSummary() {
+        selectedPassage = nil
+        uploadState = .idle
+        lastSessionPayload = nil
+        accuracyResultText = nil
+        accuracyReady = false
+        rawPoint = nil
+        filteredPoint = nil
+        phase = .home
+    }
+
     /// Called by ReadingView whenever the passage content's on-screen origin
     /// moves (initial layout or scrolling). A moved origin means gaze
     /// samples straddling the change would otherwise look like a sudden
@@ -259,9 +390,14 @@ final class AppModel: ObservableObject {
     // MARK: - forced relocation (double-tap a word)
 
     func forceRelocate(wordID: Int) {
-        let w = tracker.forceRelocate(wordID: wordID, nowMs: ARGazeEstimator.nowMs())
+        let nowMs = ARGazeEstimator.nowMs()
+        let w = tracker.forceRelocate(wordID: wordID, nowMs: nowMs)
         dynamicY.discardCurrentLine()
         dynamicX.discardCurrentLine()
+        // Double-tap bypasses handleSample's per-frame processGaze call, so
+        // feed the recorder here too -- otherwise the word the user just
+        // jumped away from would never get its dwell time flushed.
+        sessionRecorder.update(wordID: w.id, wordText: w.text, nowMs: nowMs)
         relocationFlashWordID = w.id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             if self?.relocationFlashWordID == w.id { self?.relocationFlashWordID = nil }
@@ -303,6 +439,12 @@ final class AppModel: ObservableObject {
         let calibratedX = dynamicX.calibrate(contentX)
 
         let zcut = tracker.processGaze(gx: calibratedX, gy: calibratedY, nowMs: sample.timestampMs)
+
+        if let wid = tracker.state.currentWordID, layout.words.indices.contains(wid) {
+            sessionRecorder.update(wordID: wid, wordText: layout.words[wid].text, nowMs: sample.timestampMs)
+        } else {
+            sessionRecorder.update(wordID: nil, wordText: "", nowMs: sample.timestampMs)
+        }
 
         if tracker.state.currentLine != lineBefore {
             if tracker.state.lineAdvancedBy == .zcut, layout.lines.indices.contains(lineBefore) {

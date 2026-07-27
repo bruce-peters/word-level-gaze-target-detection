@@ -15,6 +15,9 @@ struct ContentView: View {
                 Color(red: 0.043, green: 0.051, blue: 0.071).ignoresSafeArea()
 
                 switch model.phase {
+                case .home:
+                    HomeView(model: model)
+                        .frame(width: rootGeo.size.width, height: rootGeo.size.height)
                 case .welcome:
                     WelcomeView(model: model)
                         .frame(width: rootGeo.size.width, height: rootGeo.size.height)
@@ -24,6 +27,9 @@ struct ContentView: View {
                     AccuracyCheckView(model: model, rootSize: rootGeo.size)
                 case .reading:
                     ReadingView(model: model)
+                case .summary:
+                    SessionSummaryView(model: model)
+                        .frame(width: rootGeo.size.width, height: rootGeo.size.height)
                 }
 
                 if model.phase == .reading || model.phase == .accuracyCheck {

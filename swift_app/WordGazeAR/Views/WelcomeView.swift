@@ -9,6 +9,18 @@ struct WelcomeView: View {
                 .font(.title2).bold()
                 .foregroundColor(.white)
 
+            if let participant = model.participant, let passage = model.selectedPassage {
+                HStack {
+                    Text("Reading as \(participant.name) — \(passage.title) (\(passage.difficulty.label))")
+                        .font(.caption)
+                        .foregroundColor(Color(white: 0.65))
+                    Spacer()
+                    Button("Change") { model.phase = .home }
+                        .font(.caption)
+                        .foregroundColor(Color(red: 0.361, green: 0.616, blue: 0.976))
+                }
+            }
+
             Text("This uses ARKit's TrueDepth eye tracking (each eye's leftEyeTransform / rightEyeTransform) to estimate where you're looking on screen, and highlights the word and line you're reading as you go.")
                 .font(.subheadline)
                 .foregroundColor(Color(white: 0.75))

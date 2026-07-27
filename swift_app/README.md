@@ -31,6 +31,51 @@ A simple Swift/ARKit port of the word-level gaze reader in [`web_app/`](../web_a
 Left out on purpose: the error-vector-cloud model and LLM-assisted jump election — see
 `CODE_STUDY.md` at the repo root for what those do, if you want to add them back later.
 
+## Data collection
+
+On top of the reading mechanics above, the app is a small research data-collection tool:
+
+- **Home screen** — before calibration, the tester enters the participant's name, age, and
+  reading proficiency (low/medium/high), and picks which passage to run from a bank of
+  passages bundled as `passages.json`, each tagged `easy`/`medium`/`long`. See
+  `Models/Passage.swift` and `Views/HomeView.swift`.
+- **Per-word recording** — while reading, `Models/SessionRecorder.swift` watches the tracker's
+  `currentWordID` every frame (fed by `AppModel.handleSample`/`forceRelocate`) and turns it
+  into two things: an ordered **fixation trail** (every contiguous dwell on a word, in visit
+  order, as `{word_index, word, seconds}` — revisits show up again) and a **heatmap** (the same
+  visits aggregated by word, i.e. total seconds spent on each word in the passage).
+- **Finish → Summary** — tapping "Finish" in `ReadingView` stops tracking, builds a
+  `ReadingSessionPayload` (`Models/ReadingSessionPayload.swift`), always saves it locally first
+  (`Services/SessionStorage.swift`, under the app's Documents/ReadingSessions/), then
+  best-effort uploads it to Supabase (`Services/SupabaseClient.swift`) and shows the result on
+  `Views/SessionSummaryView.swift`. A failed/offline upload just leaves the session "pending" —
+  it stays safe on disk and can be retried from there, or in bulk from the "N sessions pending
+  upload" row on the home screen (`AppModel.retryPendingUploads`).
+
+### Supabase setup
+
+Sessions are written to a `reading_sessions` table — schema in
+`../supabase/migrations/0001_reading_sessions.sql` at the repo root, with an insert-only Row
+Level Security policy for the `anon` role (the on-device app can write new rows but can't read
+any back, including its own — that's what makes the embedded anon key "secure-ish" to ship in
+the client).
+
+To wire this up:
+
+1. Run `0001_reading_sessions.sql` against your Supabase project (SQL editor, or via the
+   Supabase MCP server once authenticated — see the repo root for the `claude mcp add` command
+   already used to register it).
+2. Fill in `Services/SupabaseConfig.swift`: `projectURL` is already set; `anonKey` is left
+   blank — get it from the Supabase dashboard under **Project Settings → API → Project API
+   keys → anon/public**, or ask for it to be fetched via the MCP server once authenticated.
+3. Until `anonKey` is filled in, `SupabaseClient` throws `.notConfigured` on every upload
+   attempt, but sessions still land safely as local JSON files — nothing is lost, uploads just
+   stay pending until the key is set and a retry runs.
+
+`passages.json` needs to ride along inside the `WordGazeAR/` folder when it's dragged into
+Xcode (step 3 of Setup below) so it ends up in the app bundle — check its **Target Membership**
+in the File Inspector if `PassageStore` reports zero passages at runtime.
+
 ## The one thing that's actually different: the gaze source
 
 The web/python apps estimate gaze from a **webcam** (WebGazer ridge regression, or an
@@ -65,9 +110,14 @@ should hold up through normal reading posture shifts far better than angle-only 
 WordGazeAR/
   WordGazeARApp.swift        entry point
   AppModel.swift              wires gaze -> calibration -> filter -> tracker -> UI
+  passages.json                bundled passage bank (easy/medium/long)     (new: see Data collection)
   Models/
-    LayoutModel.swift         passage text, word/line/sentence layout   (ports reading/layout.py)
+    LayoutModel.swift         word/line/sentence layout for whatever passage text is set (ports reading/layout.py)
     Tracker.swift              Z-cut + huge-jump state machine           (ports reading/tracker.py)
+    Passage.swift                Passage/PassageDifficulty + PassageStore (loads passages.json)  (new)
+    ParticipantInfo.swift        name/age/proficiency captured on HomeView                          (new)
+    SessionRecorder.swift        per-word fixation trail -> aggregated heatmap                       (new)
+    ReadingSessionPayload.swift  wire format shared by local JSON + Supabase upload                  (new)
   Gaze/
     ARGazeEstimator.swift      ARKit session + eye ray/screen-plane intersection -> (gx,gy)  (new: no python equivalent)
     Calibrator.swift            (gx,gy) -> screen point, linear regression      (ports gaze/calibration.py)
@@ -75,13 +125,19 @@ WordGazeAR/
     RollingLinearFit.swift        shared rolling-OLS core for both dynamic calibrators
     DynamicYCalibrator.swift     rolling Y' = k*Y+b refit on every Z-cut          (ports app.js §4)
     DynamicXCalibrator.swift     rolling X' = k*X+b refit on every Z-cut          (new: app.js never had this)
+  Services/
+    SupabaseConfig.swift          project URL + anon key                                             (new)
+    SupabaseClient.swift          POST a finished session to Postgres via PostgREST                  (new)
+    SessionStorage.swift          local JSON backup + pending-upload tracking                         (new)
   Views/
     ContentView.swift          phase switch + shared gaze-dot overlay
+    HomeView.swift               participant info + passage picker                                    (new)
     WelcomeView.swift
     CalibrationView.swift      smooth-pursuit dot-following calibration
     AccuracyCheckView.swift     final stare-at-a-dot step, measures noise σ
     SettingsView.swift          font size (+ read-only calibration diagnostics)
     ReadingView.swift           passage + top bar + HUD, scroll-aware
+    SessionSummaryView.swift     post-Finish recap + upload status                                    (new)
     WordView.swift               single word, line/word/read-trail highlight state
     HUDView.swift                debug panel
     PillButtonStyle.swift        shared button chrome
@@ -116,32 +172,39 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
 
 ## Using it
 
-1. **Welcome screen** → "Start calibration".
-2. **Follow the moving dot with your eyes** for about 15 seconds — no tapping, no holding
+1. **Home screen** → enter the participant's name, age, and reading proficiency, pick a
+   passage, then "Continue" (see Data collection above). "Change" on the next screen comes back
+   here if you need to fix something before calibrating.
+2. **Welcome screen** → "Start calibration".
+4. **Follow the moving dot with your eyes** for about 15 seconds — no tapping, no holding
    anything, just track it while keeping your head still. It sweeps a smooth Lissajous path
    across the whole screen; every gaze sample along the way is paired with the dot's position
    at that instant, so this one pass produces far more calibration data than a handful of
    discrete clicks would. If it can't get a good fit (e.g. you looked away partway through),
    it'll tell you and offer **Retry**, which restarts the same path from the beginning.
-3. **Accuracy check**: stare at the single green dot for ~3 seconds without moving your head.
+5. **Accuracy check**: stare at the single green dot for ~3 seconds without moving your head.
    This measures your gaze noise (mean error + standard deviation) and feeds the std-dev into
    `Tracker.state.calibStdPx`, which sets the huge-jump threshold (`JUMP_K × σ`) to *your*
    measured noise instead of a generic fallback. Tap "Start reading" once it reports a result.
-4. Reading view starts automatically. The green dot is your filtered/predicted gaze; the red
+6. Reading view starts automatically. The green dot is your filtered/predicted gaze; the red
    dot is the raw prediction. The current line is dimly highlighted, the current word is
    highlighted brighter, and every word you've already passed stays faintly tinted (the
-   read-trail) — so a line jump never leaves you unsure where you were.
-5. Read a line left→right, then sweep your eyes back to the start of the next line — that
+   read-trail) — so a line jump never leaves you unsure where you were. Every word visited also
+   gets logged (see Data collection above).
+7. Read a line left→right, then sweep your eyes back to the start of the next line — that
    return sweep is the Z-cut that advances `currentLine`, and also feeds that line's raw X/Y
    into the dynamic-X/Y regressions (see HUD `X-calib`/`Y-calib` rows).
-6. Look away for a sustained stretch (e.g. skip to a different sentence) and it'll relocate to
+8. Look away for a sustained stretch (e.g. skip to a different sentence) and it'll relocate to
    the nearest sentence start once the deviation is large and sustained enough (the huge-jump
    path) — tune via `JUMP_K` in `Tracker.swift` if it's too eager/reluctant.
-7. Double-tap any word to force the reading position there by hand.
-8. "Settings" lets you change the passage font size (re-flows the layout live) and shows the
-   measured calibration noise/error read-only. "Reset" restarts tracking from the top;
-   "Recalibrate" redoes the whole pursuit calibration + accuracy check (useful if you moved the
-   device or your head position changed a lot — this also resets both dynamic regressions).
+9. Double-tap any word to force the reading position there by hand.
+10. "Settings" lets you change the passage font size (re-flows the layout live) and shows the
+    measured calibration noise/error read-only. "Reset" restarts tracking from the top;
+    "Recalibrate" redoes the whole pursuit calibration + accuracy check (useful if you moved the
+    device or your head position changed a lot — this also resets both dynamic regressions).
+11. **"Finish"** ends the session, saves it locally, attempts the Supabase upload, and shows the
+    summary screen (duration, longest dwell times, upload status). "Done" returns to the home
+    screen with the participant fields prefilled, ready for the next passage.
 
 The bottom-right HUD mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump
 distance vs. threshold, last-advance reason, and both dynamic regressions' current `k`/`b`

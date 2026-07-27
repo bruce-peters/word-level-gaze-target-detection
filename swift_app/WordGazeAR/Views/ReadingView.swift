@@ -84,6 +84,8 @@ struct ReadingView: View {
                 .buttonStyle(PillButtonStyle(color: Color(red: 0.145, green: 0.388, blue: 0.922)))
             Button("Recalibrate") { model.beginCalibration() }
                 .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.4)))
+            Button("Finish") { model.finishReading() }
+                .buttonStyle(PillButtonStyle(color: Color(red: 0.133, green: 0.773, blue: 0.369)))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
