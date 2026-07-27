@@ -135,25 +135,50 @@ struct ReplayView: View {
         }
     }
 
-    /// Walks the much higher-resolution raw gaze trail in parallel, spacing
-    /// each point by its real recorded time gap to the next one (divided by
-    /// `speed`), so the dot moves at the same effective 3x rate as the word
-    /// highlight above -- both are cancelled together when the view
-    /// disappears, via SwiftUI's `.task`.
+    /// Walks the raw gaze trail in parallel, spacing each point by its real
+    /// recorded time gap to the next one (divided by `speed`), so the dot
+    /// moves at the same effective 3x rate as the word highlight above --
+    /// both are cancelled together when the view disappears, via SwiftUI's
+    /// `.task`. The trail is recorded at ARKit's native rate (~60Hz), which
+    /// at 3x speed would mean a ~5ms sleep between *thousands* of points --
+    /// too fine-grained to actually hit: each step's MainActor hop + SwiftUI
+    /// re-render costs real time that dwarfs a 5ms budget, so the accumulated
+    /// overhead was dragging the whole replay out well past 3x. Resampling
+    /// down to a fixed ~10 points/sec first (still visually smooth once
+    /// animated between points) bounds the number of steps regardless of how
+    /// long the session was, so per-step overhead stops being the bottleneck.
     private func runGazePlayback() async {
-        let trail = model.sessionRecorder.gazeTrail
+        let trail = downsample(model.sessionRecorder.gazeTrail, targetIntervalMs: 100)
         guard !trail.isEmpty else { return }
         for (index, sample) in trail.enumerated() {
             if Task.isCancelled { return }
-            await MainActor.run {
-                gazePoint = CGPoint(x: sample.x, y: sample.y)
-            }
             let nextMs = index + 1 < trail.count ? trail[index + 1].tMs : sample.tMs
             let deltaSeconds = min(max(nextMs - sample.tMs, 0) / 1000.0, 1.0)
             let sleepSeconds = deltaSeconds / speed
+            await MainActor.run {
+                withAnimation(sleepSeconds > 0 ? .linear(duration: sleepSeconds) : nil) {
+                    gazePoint = CGPoint(x: sample.x, y: sample.y)
+                }
+            }
             if sleepSeconds > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
             }
         }
+    }
+
+    private func downsample(_ trail: [ReplayGazeSample], targetIntervalMs: Double) -> [ReplayGazeSample] {
+        guard trail.count > 1 else { return trail }
+        var result: [ReplayGazeSample] = [trail[0]]
+        var lastKeptMs = trail[0].tMs
+        for sample in trail.dropFirst() {
+            if sample.tMs - lastKeptMs >= targetIntervalMs {
+                result.append(sample)
+                lastKeptMs = sample.tMs
+            }
+        }
+        if let last = trail.last, result.last?.tMs != last.tMs {
+            result.append(last)
+        }
+        return result
     }
 }
