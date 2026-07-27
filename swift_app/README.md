@@ -138,7 +138,8 @@ WordGazeAR/
     SettingsView.swift          font size (+ read-only calibration diagnostics)
     ReadingView.swift           passage + top bar + HUD, scroll-aware
     SessionSummaryView.swift     post-Finish recap + upload status                                    (new)
-    WordView.swift               single word, line/word/read-trail highlight state
+    ReplayView.swift              3x-speed playback of the recorded fixation trail                    (new)
+    WordView.swift               single word, line/word/read-trail highlight state (gated by showDebugOverlay)
     HUDView.swift                debug panel
     PillButtonStyle.swift        shared button chrome
 ```
@@ -186,30 +187,37 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
    This measures your gaze noise (mean error + standard deviation) and feeds the std-dev into
    `Tracker.state.calibStdPx`, which sets the huge-jump threshold (`JUMP_K × σ`) to *your*
    measured noise instead of a generic fallback. Tap "Start reading" once it reports a result.
-6. Reading view starts automatically. The green dot is your filtered/predicted gaze; the red
-   dot is the raw prediction. The current line is dimly highlighted, the current word is
-   highlighted brighter, and every word you've already passed stays faintly tinted (the
-   read-trail) — so a line jump never leaves you unsure where you were. Every word visited also
-   gets logged (see Data collection above).
+6. Reading view starts automatically. By design, it shows **plain, unhighlighted text** — no
+   gaze dots, no current-line/current-word highlight, no read-trail, no HUD. Any of that would
+   give the participant live feedback about where the system thinks they're looking, which
+   would bias how they read and undermine the point of collecting natural reading data. Every
+   word visited still gets logged in the background regardless (see Data collection above).
 7. Read a line left→right, then sweep your eyes back to the start of the next line — that
    return sweep is the Z-cut that advances `currentLine`, and also feeds that line's raw X/Y
-   into the dynamic-X/Y regressions (see HUD `X-calib`/`Y-calib` rows).
+   into the dynamic-X/Y regressions.
 8. Look away for a sustained stretch (e.g. skip to a different sentence) and it'll relocate to
    the nearest sentence start once the deviation is large and sustained enough (the huge-jump
    path) — tune via `JUMP_K` in `Tracker.swift` if it's too eager/reluctant.
-9. Double-tap any word to force the reading position there by hand.
+9. Double-tap any word to force the reading position there by hand — this is the one piece of
+   feedback that's always visible (a brief flash on the tapped word), since it's a direct
+   response to the reader's own action rather than passive gaze exposure.
 10. "Settings" lets you change the passage font size (re-flows the layout live) and shows the
     measured calibration noise/error read-only. "Reset" restarts tracking from the top;
     "Recalibrate" redoes the whole pursuit calibration + accuracy check (useful if you moved the
     device or your head position changed a lot — this also resets both dynamic regressions).
+    **"Show Debug"** reveals everything hidden in step 6 — raw/filtered gaze dots, current
+    line/word highlighting, the read-trail, and the bottom-right HUD (mirrors `ui/hud.py`:
+    current line/word, Z-cut reach/status, huge-jump distance vs. threshold, last-advance
+    reason, and both dynamic regressions' `k`/`b`/pair counts) — for debugging tracking quality
+    outside of an actual data-collection session. Off by default; toggles back to "Hide Debug".
 11. **"Finish"** ends the session, saves it locally, attempts the Supabase upload, and shows the
-    summary screen (duration, longest dwell times, upload status). "Done" returns to the home
-    screen with the participant fields prefilled, ready for the next passage.
-
-The bottom-right HUD mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump
-distance vs. threshold, last-advance reason, and both dynamic regressions' current `k`/`b`
-and pair counts, so you can see *why* a jump did or didn't fire and whether the X/Y
-calibrations are actually learning anything.
+    summary screen (duration, longest dwell times, upload status). **"Watch reading replay
+    (3x)"** plays back the just-recorded fixation trail at 3x speed — each word highlights for
+    its recorded dwell time ÷ 3, auto-scrolling to follow — so you can quickly sanity-check how
+    well tracking actually followed the participant, without re-reading the whole passage in
+    real time. "Skip" bails out immediately; it also finishes on its own once the trail runs
+    out. "Done" returns to the home screen with the participant fields prefilled, ready for the
+    next passage.
 
 ## Tuning
 
@@ -219,7 +227,7 @@ Same constants as the reference apps, same meanings — see `Models/Tracker.swif
 |---|---|---|
 | `Z_LEFT` / `Z_RIGHT` | 0.3 / 0.7 | Z-cut left/right regions (fraction of line width) |
 | `Z_COOLDOWN_MS` | 500 | Z-cut debounce |
-| `JUMP_K` | 4 | huge-jump threshold = k × σ |
+| `JUMP_K` | 1.5 | huge-jump threshold = k × σ |
 | `HUGE_JUMP_SUSTAIN_MS` | 500 | deviation must persist this long to relocate |
 | `HUGE_JUMP_COOLDOWN_MS` | 900 | settle window after a relocation |
 | `EMA_ALPHA` | 0.25 | gaze smoothing for the huge-jump test |

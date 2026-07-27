@@ -33,6 +33,13 @@ final class AppModel: ObservableObject {
     @Published var phase: AppPhase = .home
     @Published var calibError: String? = nil
 
+    /// Gates every piece of "here's what we think you're looking at" UI --
+    /// raw/filtered gaze dots, current line/word highlighting, and the HUD
+    /// panel. Off by default: showing a live indicator of the tracked word
+    /// while someone reads would bias their eye movements and undermine the
+    /// experiment. Toggled on deliberately from ReadingView for debugging.
+    @Published var showDebugOverlay: Bool = false
+
     // MARK: - data-collection session state (home screen, recording, upload)
 
     let passages: [Passage] = PassageStore.shared.passages

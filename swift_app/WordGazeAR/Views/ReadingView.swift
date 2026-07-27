@@ -19,7 +19,6 @@ struct ReadingView: View {
     // doesn't touch any of AppModel's own @Published properties -- still
     // triggers a re-render. `model.objectWillChange` alone wouldn't catch it.
     @ObservedObject private var layout: LayoutModel
-    @State private var showHUD = true
     @State private var showSettings = false
 
     init(model: AppModel) {
@@ -43,7 +42,8 @@ struct ReadingView: View {
                             WordView(word: word,
                                       state: model.tracker.state,
                                       flashWordID: model.relocationFlashWordID,
-                                      font: layout.swiftUIFont) {
+                                      font: layout.swiftUIFont,
+                                      showDebugOverlay: model.showDebugOverlay) {
                                 model.forceRelocate(wordID: word.id)
                             }
                         }
@@ -63,7 +63,7 @@ struct ReadingView: View {
         }
         .background(Color(red: 0.043, green: 0.051, blue: 0.071))
         .overlay(alignment: .bottomTrailing) {
-            if showHUD {
+            if model.showDebugOverlay {
                 HUDView(model: model).padding(10)
             }
         }
@@ -76,7 +76,7 @@ struct ReadingView: View {
         HStack(spacing: 8) {
             Text("Word Gaze AR").font(.subheadline).bold().foregroundColor(.white)
             Spacer()
-            Button(showHUD ? "Hide HUD" : "Show HUD") { showHUD.toggle() }
+            Button(model.showDebugOverlay ? "Hide Debug" : "Show Debug") { model.showDebugOverlay.toggle() }
                 .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.4)))
             Button("Settings") { showSettings = true }
                 .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.4)))

@@ -12,8 +12,10 @@ import CoreGraphics
 import Combine
 import Foundation
 
-// "How many sigmas is HUGE": bigger = harder to trigger a relocation.
-let JUMP_K: CGFloat = 4
+// "How many sigmas is HUGE": bigger = harder to trigger a relocation. Lowered
+// from 4 to 1.5 to trust the eye tracker more aggressively -- relocate on a
+// smaller sustained deviation instead of waiting for a very large one.
+let JUMP_K: CGFloat = 1.5
 
 // Z-cut left/right thresholds as fractions of line width. The paper uses 20%
 // borders; relaxed to 30%/70% because gaze estimates compress toward center

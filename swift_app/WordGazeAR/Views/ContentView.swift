@@ -32,7 +32,7 @@ struct ContentView: View {
                         .frame(width: rootGeo.size.width, height: rootGeo.size.height)
                 }
 
-                if model.phase == .reading || model.phase == .accuracyCheck {
+                if model.phase == .accuracyCheck || (model.phase == .reading && model.showDebugOverlay) {
                     if let raw = model.rawPoint {
                         Circle()
                             .fill(Color(red: 0.937, green: 0.267, blue: 0.267).opacity(0.85))

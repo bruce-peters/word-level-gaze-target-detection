@@ -8,6 +8,7 @@ import SwiftUI
 
 struct SessionSummaryView: View {
     @ObservedObject var model: AppModel
+    @State private var showReplay = false
 
     var body: some View {
         ScrollView {
@@ -19,6 +20,21 @@ struct SessionSummaryView: View {
                 if let payload = model.lastSessionPayload {
                     recap(payload)
                     uploadStatus
+
+                    if !payload.fixations.isEmpty {
+                        Button {
+                            showReplay = true
+                        } label: {
+                            Text("Watch reading replay (3x)")
+                                .bold()
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(Color.gray.opacity(0.25))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                    }
+
                     topWords(payload)
                 } else {
                     Text("No session data recorded.")
@@ -43,6 +59,11 @@ struct SessionSummaryView: View {
             .background(Color(red: 0.082, green: 0.094, blue: 0.133))
             .cornerRadius(16)
             .padding(.vertical, 40)
+        }
+        .fullScreenCover(isPresented: $showReplay) {
+            if let payload = model.lastSessionPayload {
+                ReplayView(model: model, payload: payload)
+            }
         }
     }
 
