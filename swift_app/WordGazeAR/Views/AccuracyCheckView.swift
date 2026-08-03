@@ -1,9 +1,12 @@
 // Final calibration step: stare at a single center dot for ~3s. Mirrors
 // ui/overlays.py's AccuracyOverlay / app_window.py's _run_accuracy_check --
 // measures mean error (accuracy/bias) and standard deviation (precision/
-// noise) of predicted gaze around the dot, and feeds the std-dev into
-// Tracker.state.calibStdPx, which Tracker.jumpSigma() uses to scale the
-// huge-jump threshold to this user's actual measured noise.
+// noise) of predicted gaze around the dot, for both the engineered pipeline
+// and the Apple-lookAtPoint baseline (see ARKIT_GAZE_RESEARCH.md §3.2), and
+// feeds the engineered pipeline's std-dev into Tracker.state.calibStdPx,
+// which Tracker.jumpSigma()/fixationDispersionThreshold() use to scale the
+// huge-jump threshold and fixation-clustering tolerance to this user's
+// actual measured noise.
 
 import SwiftUI
 

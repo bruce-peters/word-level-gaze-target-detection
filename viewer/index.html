@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>WordGazeAR — Session Viewer</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>WordGazeAR Session Viewer</h1>
+    <div class="topbar-actions">
+      <input id="filterInput" type="text" placeholder="Filter by name or passage…" />
+      <button id="refreshBtn">Refresh</button>
+      <button id="exportCsvBtn">Export CSV</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="configWarning" class="warning hidden">
+      <strong>Not configured.</strong> Copy <code>config.example.js</code> to
+      <code>config.js</code> and fill in your Supabase project's service_role key.
+      See <code>README.md</code>.
+    </div>
+
+    <div id="loadState" class="status hidden">Loading sessions…</div>
+    <div id="errorState" class="status error hidden"></div>
+    <div id="emptyState" class="status hidden">No sessions yet.</div>
+
+    <table id="sessionsTable" class="sessions-table hidden">
+      <thead>
+        <tr>
+          <th>When</th>
+          <th>Participant</th>
+          <th>Age</th>
+          <th>Proficiency</th>
+          <th>Passage</th>
+          <th>Difficulty</th>
+          <th>Duration</th>
+          <th>Words</th>
+          <th>Fixated</th>
+        </tr>
+      </thead>
+      <tbody id="sessionsBody"></tbody>
+    </table>
+  </main>
+
+  <div id="detailOverlay" class="overlay hidden">
+    <div class="detail-panel">
+      <div class="detail-header">
+        <h2 id="detailTitle"></h2>
+        <div class="detail-actions">
+          <button id="downloadJsonBtn">Download JSON</button>
+          <button id="closeDetailBtn">Close</button>
+        </div>
+      </div>
+      <div id="detailMeta" class="detail-meta"></div>
+
+      <section>
+        <div class="section-header">
+          <h3>Heatmap <span class="hint">(darker = more time)</span></h3>
+          <label class="replay-toggle">
+            <input type="checkbox" id="replayToggle" />
+            Show gaze replay <span class="hint">(word-level — raw gaze dots aren't uploaded)</span>
+          </label>
+        </div>
+        <div id="heatmapView" class="heatmap"></div>
+        <div id="replayControls" class="replay-controls hidden">
+          <button id="replayPlayPauseBtn">Pause</button>
+          <button id="replayRestartBtn">Restart</button>
+          <select id="replaySpeedSelect">
+            <option value="1">1x</option>
+            <option value="3" selected>3x</option>
+            <option value="10">10x</option>
+          </select>
+          <span id="replayProgress" class="replay-progress"></span>
+        </div>
+      </section>
+
+      <section>
+        <h3>Fixation trail <span class="hint">(visit order)</span></h3>
+        <div id="fixationList" class="fixation-list"></div>
+      </section>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

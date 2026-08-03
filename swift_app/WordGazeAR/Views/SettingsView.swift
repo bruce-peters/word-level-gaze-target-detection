@@ -52,6 +52,19 @@ struct SettingsView: View {
                 } footer: {
                     Text("Measured during the accuracy-check dot at the end of calibration. Used as the noise scale for deciding whether a gaze deviation is a genuine jump.")
                 }
+
+                Section {
+                    LabeledContent("Ours") {
+                        Text(model.oursAccuracy.map { String(format: "%.0fpx err / %.0fpx \u{03C3}", $0.errorPx, $0.stdPx) } ?? "not measured")
+                    }
+                    LabeledContent("Apple lookAtPoint") {
+                        Text(model.baselineAccuracy.map { String(format: "%.0fpx err / %.0fpx \u{03C3}", $0.errorPx, $0.stdPx) } ?? "not measured")
+                    }
+                } header: {
+                    Text("Ours vs. Apple's own gaze estimate")
+                } footer: {
+                    Text("Both calibrated the same way, from the same session, then measured by the same accuracy-check dot -- see ARKIT_GAZE_RESEARCH.md for what each pipeline actually is.")
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

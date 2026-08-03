@@ -3,7 +3,7 @@
 // Direct port of python_app/reading/tracker.py (itself a port of app.js
 // sections 2 and 4-7): Z-cut line switching + huge-jump relocation to the
 // nearest sentence start. UI-agnostic -- operates purely on point coordinates
-// from a LayoutModel and exposes `processGaze(gx:gy:nowMs:)`. Deliberately
+// from a LayoutModel and exposes `processGaze(gx:gy:nowMs:fixationX:)`. Deliberately
 // leaves out the paper's dynamic-Y calibration, error-vector-cloud model and
 // LLM election (see CODE_STUDY.md) -- this is the "simple line tracking +
 // z-jumps" subset the demo actually needs.
@@ -27,6 +27,20 @@ let Z_COOLDOWN_MS: Double = 500
 let HUGE_JUMP_SUSTAIN_MS: Double = 500   // deviation must hold this long to count
 let HUGE_JUMP_COOLDOWN_MS: Double = 900  // settle time after a relocation (no re-trigger)
 let EMA_ALPHA: CGFloat = 0.25            // gaze smoothing (lower = smoother / more lag)
+
+// Preferred Viewing Location bias (Rayner 1979): fixations land slightly
+// left of a word's true center, not at it. Used to bias word hit-testing's
+// effective anchor point instead of the raw xCenter. See
+// ARKIT_GAZE_RESEARCH.md.
+let PVL_OFFSET_FRACTION: CGFloat = 0.4
+
+// Linguistic-length prior weight (Rayner 1998; Kliegl et al. 2004): longer
+// words draw more/longer fixations and are fixated more reliably than short
+// function words, which are frequently skipped outright. Used to break ties
+// near word boundaries toward the longer candidate instead of pure nearest-
+// distance. 0 disables the prior (pure nearest-distance, the old
+// behavior); tuned empirically once on-device -- see ARKIT_GAZE_RESEARCH.md.
+let LENGTH_PRIOR_WEIGHT: CGFloat = 6
 
 func clamp<T: Comparable>(_ v: T, _ lo: T, _ hi: T) -> T {
     min(max(v, lo), hi)
@@ -149,18 +163,33 @@ final class Tracker {
 
     // MARK: - word-within-line (best-effort)
 
+    /// The preferred-viewing-location point for hit-testing, instead of a
+    /// word's raw xCenter -- Rayner (1979): initial fixations land slightly
+    /// left of a word's true center. See `PVL_OFFSET_FRACTION`.
+    private func pvlPoint(_ w: Word) -> CGFloat {
+        w.xStart + PVL_OFFSET_FRACTION * w.width
+    }
+
+    /// Nearest-word hit-test, scored by distance to each candidate's
+    /// preferred-viewing-location point *minus* a length-based prior bonus
+    /// (`LENGTH_PRIOR_WEIGHT * log(length)`) -- longer words draw more/
+    /// longer fixations and are fixated more reliably than short function
+    /// words (Rayner 1998; Kliegl et al. 2004), so near a word boundary the
+    /// longer candidate should win a close call rather than pure nearest-
+    /// distance. See ARKIT_GAZE_RESEARCH.md.
     func assignWord(gx: CGFloat) -> Int? {
         let st = state
         guard layout.lines.indices.contains(st.currentLine) else { return nil }
         let line = layout.lines[st.currentLine]
         var best: Int? = nil
-        var bestD = CGFloat.greatestFiniteMagnitude
+        var bestScore = CGFloat.greatestFiniteMagnitude
         for wid in line.wordIDs {
             let w = layout.words[wid]
-            if gx >= w.xStart && gx <= w.xEnd { return wid }
-            let d = gx < w.xStart ? w.xStart - gx : gx - w.xEnd
-            if d < bestD {
-                bestD = d
+            let d = abs(gx - pvlPoint(w))
+            let prior = LENGTH_PRIOR_WEIGHT * log(CGFloat(max(w.text.count, 1)))
+            let score = d - prior
+            if score < bestScore {
+                bestScore = score
                 best = wid
             }
         }
@@ -169,11 +198,45 @@ final class Tracker {
 
     // MARK: - huge-jump relocation
 
-    func jumpSigma() -> CGFloat {
+    /// Where `gx`/the current line sit within the reading area, as the two
+    /// fractions ErrorModel wants: 0 at either horizontal edge of the
+    /// current line (1 at its center), and 0 at the top of the passage (1
+    /// at the bottom). Shared by `jumpSigma` (huge-jump scale) and
+    /// `fixationDispersionThreshold` (word scale) -- same position-
+    /// dependent trend, two different base magnitudes.
+    private func positionFractions(gx: CGFloat) -> (fromEdge: CGFloat, fromTop: CGFloat) {
+        guard layout.lines.indices.contains(state.currentLine) else { return (1, 0) }
+        let line = layout.lines[state.currentLine]
+        let normX = clamp((gx - line.xMin) / max(1, line.width), 0, 1)
+        let fractionFromEdge = 1 - 2 * abs(normX - 0.5)
+        let fractionFromTop = layout.lines.count > 1
+            ? CGFloat(state.currentLine) / CGFloat(layout.lines.count - 1)
+            : 0
+        return (fractionFromEdge, fractionFromTop)
+    }
+
+    /// Position-dependent noise floor for huge-jump detection -- see
+    /// ErrorModel. Both the edge and bottom effects are independently
+    /// documented as harder for ARKit/TrueDepth face tracking specifically
+    /// (edges: horizontal compression; bottom: eyelid occlusion on downward
+    /// gaze) -- see ARKIT_GAZE_RESEARCH.md.
+    func jumpSigma(gx: CGFloat) -> CGFloat {
         let st = state
         let gap = estimateLineGap()
-        let s = st.calibStdPx ?? st.measuredErrPx ?? (gap > 0 ? gap * 0.6 : 40)
-        return max(s, gap * 1.5)
+        let base = st.calibStdPx ?? st.measuredErrPx ?? (gap > 0 ? gap * 0.6 : 40)
+        let floored = max(base, gap * 1.5)
+        let (fromEdge, fromTop) = positionFractions(gx: gx)
+        return ErrorModel.radius(baseSigma: floored, fractionFromEdge: fromEdge, fractionFromTop: fromTop)
+    }
+
+    /// Small-scale position-aware noise floor for FixationDetector's
+    /// clustering tolerance -- as opposed to `jumpSigma`'s much larger
+    /// huge-jump scale, this has no line-gap floor: a fixation should
+    /// cluster at roughly word scale, not line scale.
+    func fixationDispersionThreshold(gx: CGFloat) -> CGFloat {
+        let base = state.calibStdPx ?? state.measuredErrPx ?? 30
+        let (fromEdge, fromTop) = positionFractions(gx: gx)
+        return ErrorModel.radius(baseSigma: base, fractionFromEdge: fromEdge, fractionFromTop: fromTop)
     }
 
     func detectHugeJump(gx: CGFloat, gy: CGFloat, nowMs: Double) -> Bool {
@@ -187,7 +250,7 @@ final class Tracker {
         guard layout.lines.indices.contains(st.currentLine) else { return false }
         let cur = layout.lines[st.currentLine]
 
-        let thresh = JUMP_K * jumpSigma()
+        let thresh = JUMP_K * jumpSigma(gx: gx)
         let dist = abs((st.gazeEMA?.y ?? gy) - cur.yCenter)
         st.hugeDbg = HugeDbg(dist: dist, thresh: thresh)
 
@@ -276,8 +339,16 @@ final class Tracker {
     /// Equivalent of the line-assignment half of app.js's onGaze(): given a
     /// filtered/predicted gaze point in layout coordinates, update tracking
     /// state. Returns true if a Z-cut fired this frame.
+    ///
+    /// `fixationX` is the caller's FixationDetector.currentCentroid.x (nil
+    /// mid-saccade): line assignment (Z-cut/huge-jump) always uses the raw,
+    /// continuous `gx` -- those mechanisms are timing-sensitive and already
+    /// robust to per-sample noise -- but the final word choice only updates
+    /// when a stable fixation centroid is available, holding the previous
+    /// word during a saccade-in-flight rather than trusting a noisy
+    /// transit sample (see FixationDetector's header + ARKIT_GAZE_RESEARCH.md).
     @discardableResult
-    func processGaze(gx: CGFloat, gy: CGFloat, nowMs: Double) -> Bool {
+    func processGaze(gx: CGFloat, gy: CGFloat, nowMs: Double, fixationX: CGFloat?) -> Bool {
         let st = state
         zcutJustFired = false
         if detectHugeJump(gx: gx, gy: gy, nowMs: nowMs) {
@@ -286,10 +357,12 @@ final class Tracker {
             return false
         }
         let zcut = assignLine(gx: gx, nowMs: nowMs)
-        let wordID = assignWord(gx: gx)
-        st.currentWordID = wordID
-        if let wid = wordID, layout.words[wid].orderIndex > st.maxOrderReached {
-            st.maxOrderReached = layout.words[wid].orderIndex
+        if let fx = fixationX {
+            let wordID = assignWord(gx: fx)
+            st.currentWordID = wordID
+            if let wid = wordID, layout.words[wid].orderIndex > st.maxOrderReached {
+                st.maxOrderReached = layout.words[wid].orderIndex
+            }
         }
         zcutJustFired = zcut
         return zcut

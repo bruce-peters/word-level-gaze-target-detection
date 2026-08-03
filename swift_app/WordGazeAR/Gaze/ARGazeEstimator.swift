@@ -35,6 +35,26 @@
 // intersection's direction of travel, so `resolveForwardSign` below
 // self-corrects at runtime rather than assuming a specific ARKit axis
 // convention.
+//
+// BASELINE SIGNAL (lax, lay): alongside the engineered ray/plane estimate
+// above, every sample also carries ARKit's own `ARFaceAnchor.lookAtPoint` --
+// "a position, in face coordinate space, estimating the direction of the
+// face's gaze" (Apple's own description). Used directly, with no
+// head-translation correction, this is the *naive* way most ARKit-gaze
+// tutorials map gaze to a screen point -- exactly the "angle-only" approach
+// this file's v2 header already argues is head-movement-fragile. Shipping
+// it as a second feature pair lets AppModel run an independent calibration
+// + accuracy measurement against it, so the "does our engineering actually
+// help" question has a real on-device number behind it (see
+// ARKIT_GAZE_RESEARCH.md) instead of just this file's comments asserting it.
+//
+// BLINK GATING: both signals are gated on the same per-frame blink check
+// before either is computed, so neither pipeline sees a sample the other
+// doesn't -- a fair, paired comparison. Rejecting samples during a blink is
+// standard eye-tracking practice, and directly motivated here by Bignardi et
+// al. (2024)'s finding that ARKit's iPad face tracking suffers "catastrophic"
+// failures in some observers specifically from eyelids/eyelashes occluding
+// the pupil (see ARKIT_GAZE_RESEARCH.md).
 
 import ARKit
 import Combine
@@ -47,13 +67,35 @@ struct GazeSample {
     /// -0.05...0.05) for ordinary head positions.
     let gx: Double
     let gy: Double
+    /// Baseline feature pair: raw `ARFaceAnchor.lookAtPoint.x/.y`, in face
+    /// coordinate space (meters, small numbers centered near 0). See file
+    /// header -- this is Apple's own gaze-direction estimate, used with no
+    /// head-translation correction, calibrated by its own Calibrator
+    /// instance in AppModel for a head-to-head accuracy comparison.
+    let lax: Double
+    let lay: Double
     let timestampMs: Double
 }
+
+/// Blink amount (max of both eyes' `eyeBlinkLeft`/`eyeBlinkRight` blend
+/// shapes, each 0=open...1=closed) above which a frame's gaze estimate is
+/// considered unreliable and dropped rather than fed to either pipeline.
+/// 0.5 is a conservative middle point: high enough that ordinary downward
+/// reading gaze (partial eyelid coverage, not a full blink -- also
+/// documented as an ARKit accuracy issue, see ARKIT_GAZE_RESEARCH.md) isn't
+/// mistaken for a blink and needlessly discarded, low enough to catch real
+/// blinks before the closing/opening eyelid corrupts the pupil-based
+/// estimate.
+let BLINK_THRESHOLD: Float = 0.5
 
 final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
     @Published var isRunning = false
     @Published var lastError: String? = nil
     @Published var faceVisible = false
+    /// True on frames where a blink was detected and the sample was
+    /// dropped (face is still tracked -- `faceVisible` stays true). Purely
+    /// informational, surfaced on the debug HUD.
+    @Published var isBlinking = false
 
     /// Called on the main thread for every face-tracking frame that yields a
     /// gaze estimate.
@@ -95,7 +137,23 @@ final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
             DispatchQueue.main.async { self.faceVisible = false }
             return
         }
+
+        // Blink gate -- applies to BOTH signals below, so the engineered
+        // and baseline pipelines always see the same set of frames (see
+        // file header). Face is present and tracked, just mid-blink, so
+        // faceVisible stays true; only sample emission is skipped.
+        if Self.isBlinking(faceAnchor: faceAnchor) {
+            DispatchQueue.main.async {
+                self.faceVisible = true
+                self.isBlinking = true
+            }
+            return
+        }
+
         guard let (gx, gy) = Self.gazeScreenRay(faceAnchor: faceAnchor, camera: frame.camera) else {
+            return
+        }
+        guard let (lax, lay) = Self.baselineGazePoint(faceAnchor: faceAnchor) else {
             return
         }
 
@@ -103,7 +161,8 @@ final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
 
         DispatchQueue.main.async {
             self.faceVisible = true
-            self.onSample?(GazeSample(gx: gx, gy: gy, timestampMs: nowMs))
+            self.isBlinking = false
+            self.onSample?(GazeSample(gx: gx, gy: gy, lax: lax, lay: lay, timestampMs: nowMs))
         }
     }
 
@@ -113,6 +172,32 @@ final class ARGazeEstimator: NSObject, ObservableObject, ARSessionDelegate {
 
     func sessionWasInterrupted(_ session: ARSession) {
         DispatchQueue.main.async { self.faceVisible = false }
+    }
+
+    // MARK: - blink gating + baseline signal
+
+    /// True when either eye's blend-shape blink coefficient exceeds
+    /// `BLINK_THRESHOLD`. Standard eye-tracking artifact rejection: a
+    /// closing/opening eyelid corrupts whatever the pupil/iris-based
+    /// estimate is doing underneath, for both the engineered and baseline
+    /// signal alike.
+    static func isBlinking(faceAnchor: ARFaceAnchor) -> Bool {
+        // .floatValue (not `as? Float`) -- the reliable way to pull a
+        // numeric value out of the NSNumber blendShapes stores.
+        let left = faceAnchor.blendShapes[.eyeBlinkLeft]?.floatValue ?? 0
+        let right = faceAnchor.blendShapes[.eyeBlinkRight]?.floatValue ?? 0
+        return max(left, right) > BLINK_THRESHOLD
+    }
+
+    /// Apple's own gaze-direction estimate, used as-is (face coordinate
+    /// space, no head-translation correction) as the baseline feature pair
+    /// -- see file header. `lookAtPoint` is always present on a tracked
+    /// face anchor (unlike the ray/plane intersection above, which can
+    /// legitimately fail), so this only returns nil on a non-finite value.
+    static func baselineGazePoint(faceAnchor: ARFaceAnchor) -> (lax: Double, lay: Double)? {
+        let p = faceAnchor.lookAtPoint
+        guard p.x.isFinite, p.y.isFinite else { return nil }
+        return (Double(p.x), Double(p.y))
     }
 
     // MARK: - eye-transform math

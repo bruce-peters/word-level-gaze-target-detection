@@ -47,6 +47,19 @@ struct ContentView: View {
                             .position(filtered)
                             .allowsHitTesting(false)
                     }
+                    // Apple lookAtPoint baseline -- same calibration
+                    // procedure, different upstream signal (see
+                    // ARGazeEstimator's file header). Debug-only, distinct
+                    // color, so a live read-through visually shows whether
+                    // green (ours) tracks the line noticeably better than
+                    // amber (baseline).
+                    if let baseline = model.baselinePoint {
+                        Circle()
+                            .stroke(Color(red: 0.976, green: 0.647, blue: 0.145).opacity(0.9), lineWidth: 2)
+                            .frame(width: 14, height: 14)
+                            .position(baseline)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
             .onAppear {

@@ -23,6 +23,16 @@ enum UploadState: Equatable {
     case failed(String)
 }
 
+/// Mean error (accuracy/bias) + standard deviation (precision/noise) of
+/// predicted gaze around a known target, in points. Same statistics
+/// `AppModel.finishAccuracyCheck` has always computed for the engineered
+/// pipeline; now computed for the baseline pipeline too, for a head-to-head
+/// comparison -- see ARKIT_GAZE_RESEARCH.md.
+struct AccuracyStat: Equatable {
+    let errorPx: CGFloat
+    let stdPx: CGFloat
+}
+
 /// How long the pursuit-calibration dot takes for one lap. Shared between
 /// AppModel (which schedules the actual completion timer) and
 /// CalibrationView (which animates the dot over the same span), so the two
@@ -53,6 +63,7 @@ final class AppModel: ObservableObject {
     @Published var rawPoint: CGPoint? = nil
     @Published var filteredPoint: CGPoint? = nil
     @Published var faceVisible = false
+    @Published var isBlinking = false
     @Published var sourceError: String? = nil
 
     @Published var hudLines: [String] = []
@@ -62,6 +73,15 @@ final class AppModel: ObservableObject {
     @Published var accuracyResultText: String? = nil
     @Published var accuracyReady = false
 
+    /// Structured comparison numbers behind `accuracyResultText`, kept
+    /// around for the HUD and for `ReadingSessionPayload` so every test
+    /// session silently accumulates data for the poster's aggregate
+    /// ours-vs-baseline comparison, not just the on-screen text of one run.
+    /// See AccuracyStat + ARKIT_GAZE_RESEARCH.md.
+    @Published var oursAccuracy: AccuracyStat? = nil
+    @Published var baselineAccuracy: AccuracyStat? = nil
+    private(set) var avgWordWidthPx: CGFloat? = nil
+
     let gaze = ARGazeEstimator()
     let calibrator = Calibrator()
     private let filter = GazeFilter()
@@ -69,6 +89,25 @@ final class AppModel: ObservableObject {
     let tracker: Tracker
     let dynamicY = DynamicYCalibrator()
     let dynamicX = DynamicXCalibrator()
+
+    /// Baseline pipeline: calibrated straight from ARKit's own
+    /// `lookAtPoint` (see ARGazeEstimator's `lax`/`lay`), run in parallel
+    /// with the engineered ray/plane pipeline above using the identical
+    /// Calibrator class and the identical accuracy-check measurement, so
+    /// the two are a fair, paired comparison -- see ARKIT_GAZE_RESEARCH.md.
+    /// Never gates or blocks the real reading session: it's supplementary
+    /// instrumentation, not part of the tracked-reading experience.
+    let baselineCalibrator = Calibrator()
+    private let baselineFilter = GazeFilter()
+    @Published var baselinePoint: CGPoint? = nil
+    private var baselineAccuracySamples: [CGPoint] = []
+
+    /// Online I-DT fixation clustering on the engineered pipeline's final
+    /// (dynamic-X/Y-calibrated) point -- see FixationDetector. Word
+    /// assignment reads its `currentCentroid` instead of the raw per-frame
+    /// sample; Z-cut/huge-jump line tracking is untouched (still driven by
+    /// the raw per-frame point, see Tracker.processGaze).
+    private let fixationDetector = FixationDetector()
 
     /// Updated every animation frame by the pursuit-calibration dot as it
     /// moves; `pursuitActive` flips true once the view has sent its first
@@ -106,6 +145,9 @@ final class AppModel: ObservableObject {
         gaze.$faceVisible
             .receive(on: DispatchQueue.main)
             .assign(to: &$faceVisible)
+        gaze.$isBlinking
+            .receive(on: DispatchQueue.main)
+            .assign(to: &$isBlinking)
     }
 
     // MARK: - phase transitions
@@ -127,6 +169,7 @@ final class AppModel: ObservableObject {
         calibError = nil
         pursuitActive = false
         calibrator.clear()
+        baselineCalibrator.clear()
         dynamicY.reset()
         dynamicX.reset()
         tracker.state.calibStdPx = nil
@@ -184,8 +227,15 @@ final class AppModel: ObservableObject {
             calibrator.clear()
             return
         }
+        // Supplementary instrumentation only -- a failed baseline fit never
+        // blocks or degrades the real reading session, it just means the
+        // comparison numbers are unavailable for this run.
+        try? baselineCalibrator.fit()
+
         accuracyResultText = nil
         accuracyReady = false
+        oursAccuracy = nil
+        baselineAccuracy = nil
         filteredPoint = nil
         phase = .accuracyCheck
     }
@@ -198,6 +248,7 @@ final class AppModel: ObservableObject {
     func beginAccuracyCheck(dotPoint: CGPoint) {
         accuracyTargetPoint = dotPoint
         accuracySamples = []
+        baselineAccuracySamples = []
         accuracyActive = true
         accuracyResultText = "Measuring... keep looking at the dot"
         accuracyReady = false
@@ -210,47 +261,78 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func finishAccuracyCheck() {
-        accuracyActive = false
-        guard accuracySamples.count >= 5 else {
-            accuracyResultText = "Not enough gaze samples -- check lighting and keep your face in frame, then try again."
-            accuracyReady = true
-            return
-        }
-
-        let n = CGFloat(accuracySamples.count)
-        let meanX = accuracySamples.reduce(CGFloat(0)) { $0 + $1.x } / n
-        let meanY = accuracySamples.reduce(CGFloat(0)) { $0 + $1.y } / n
-        let dx = meanX - accuracyTargetPoint.x
-        let dy = meanY - accuracyTargetPoint.y
+    /// Mean error (bias vs. `target`) + standard deviation (noise) of a
+    /// sample cloud -- the same formula for both pipelines, so the
+    /// ours-vs-baseline comparison is apples-to-apples.
+    private static func errorStat(samples: [CGPoint], target: CGPoint) -> AccuracyStat? {
+        guard samples.count >= 5 else { return nil }
+        let n = CGFloat(samples.count)
+        let meanX = samples.reduce(CGFloat(0)) { $0 + $1.x } / n
+        let meanY = samples.reduce(CGFloat(0)) { $0 + $1.y } / n
+        let dx = meanX - target.x
+        let dy = meanY - target.y
         let errPx = (dx * dx + dy * dy).squareRoot()
-        let varSum = accuracySamples.reduce(CGFloat(0)) { acc, p in
+        let varSum = samples.reduce(CGFloat(0)) { acc, p in
             let ddx = p.x - meanX
             let ddy = p.y - meanY
             return acc + ddx * ddx + ddy * ddy
         }
         let stdPx = (varSum / n).squareRoot()
+        return AccuracyStat(errorPx: errPx, stdPx: stdPx)
+    }
 
-        // This is the payoff: calibStdPx feeds Tracker.jumpSigma(), which
-        // sets the huge-jump threshold (JUMP_K * sigma) -- so the jump
-        // detector is now scaled to this user's actually-measured noise
-        // instead of a generic line-gap fallback.
-        tracker.state.measuredErrPx = errPx
-        tracker.state.calibStdPx = stdPx
+    private func finishAccuracyCheck() {
+        accuracyActive = false
+        guard let ours = Self.errorStat(samples: accuracySamples, target: accuracyTargetPoint) else {
+            accuracyResultText = "Not enough gaze samples -- check lighting and keep your face in frame, then try again."
+            accuracyReady = true
+            return
+        }
+        oursAccuracy = ours
+        baselineAccuracy = Self.errorStat(samples: baselineAccuracySamples, target: accuracyTargetPoint)
+
+        // This is the payoff: calibStdPx feeds Tracker.jumpSigma()/
+        // fixationDispersionThreshold(), which scale the huge-jump
+        // threshold and fixation-clustering tolerance to this user's
+        // actually-measured noise instead of a generic fallback.
+        tracker.state.measuredErrPx = ours.errorPx
+        tracker.state.calibStdPx = ours.stdPx
 
         let gap = tracker.estimateLineGap()
         let verdict: String
-        if errPx < gap {
+        if ours.errorPx < gap {
             verdict = "good enough for line-level tracking."
-        } else if errPx < gap * 2 {
+        } else if ours.errorPx < gap * 2 {
             verdict = "usable, expect some drift."
         } else {
             verdict = "coarse -- consider recalibrating or improving lighting."
         }
-        accuracyResultText = String(
-            format: "Mean error \u{2248} %.0fpx, noise \u{03C3} \u{2248} %.0fpx (line gap \u{2248} %.0fpx). %@",
-            errPx, stdPx, gap, verdict
+
+        // Average word width in points -- lets the raw px error translate
+        // directly into "are words distinguishable" instead of an abstract
+        // number. Computed once here (layout is already built by the time
+        // the accuracy check runs -- see ensureLayoutBuilt).
+        if avgWordWidthPx == nil, !layout.words.isEmpty {
+            avgWordWidthPx = layout.words.reduce(CGFloat(0)) { $0 + $1.width } / CGFloat(layout.words.count)
+        }
+
+        var text = String(
+            format: "Ours: mean error \u{2248} %.0fpx, noise \u{03C3} \u{2248} %.0fpx (line gap \u{2248} %.0fpx). %@",
+            ours.errorPx, ours.stdPx, gap, verdict
         )
+        if let baseline = baselineAccuracy {
+            text += String(format: "\nApple lookAtPoint baseline: mean error \u{2248} %.0fpx, noise \u{03C3} \u{2248} %.0fpx.", baseline.errorPx, baseline.stdPx)
+            if baseline.errorPx > 0 {
+                let improvementPct = (1 - ours.errorPx / baseline.errorPx) * 100
+                text += String(format: " Ours is %.0f%% tighter.", improvementPct)
+            }
+            if let w = avgWordWidthPx, w > 0 {
+                text += String(format: "\nRelative to avg word width (\u{2248}%.0fpx): ours %.1f\u{00D7}, baseline %.1f\u{00D7}.", w, ours.errorPx / w, baseline.errorPx / w)
+            }
+        } else {
+            text += " (Apple lookAtPoint baseline unavailable this run.)"
+        }
+        accuracyResultText = text
         accuracyReady = true
     }
 
@@ -260,6 +342,8 @@ final class AppModel: ObservableObject {
 
     func startReading() {
         filter.reset()
+        baselineFilter.reset()
+        fixationDetector.reset()
         tracker.startTracking()
         sessionRecorder.start(nowMs: ARGazeEstimator.nowMs())
         phase = .reading
@@ -268,18 +352,25 @@ final class AppModel: ObservableObject {
     func restart() {
         gaze.stop()
         calibrator.clear()
+        baselineCalibrator.clear()
         dynamicY.reset()
         dynamicX.reset()
+        fixationDetector.reset()
         pursuitActive = false
         rawPoint = nil
         filteredPoint = nil
+        baselinePoint = nil
         accuracyResultText = nil
         accuracyReady = false
+        oursAccuracy = nil
+        baselineAccuracy = nil
         phase = .welcome
     }
 
     func resetTracking() {
         filter.reset()
+        baselineFilter.reset()
+        fixationDetector.reset()
         tracker.startTracking()
     }
 
@@ -309,7 +400,12 @@ final class AppModel: ObservableObject {
             heatmap: result.heatmap,
             fixations: result.fixations,
             deviceModel: UIDevice.current.model,
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown",
+            oursErrorPx: oursAccuracy.map { Double($0.errorPx) },
+            oursStdPx: oursAccuracy.map { Double($0.stdPx) },
+            baselineErrorPx: baselineAccuracy.map { Double($0.errorPx) },
+            baselineStdPx: baselineAccuracy.map { Double($0.stdPx) },
+            avgWordWidthPx: avgWordWidthPx.map { Double($0) }
         )
 
         lastSessionPayload = payload
@@ -390,6 +486,12 @@ final class AppModel: ObservableObject {
             tracker.state.gazeEMA = nil
             tracker.state.hugeJump.overMs = 0
             tracker.state.hugeJump.cooldownUntil = ARGazeEstimator.nowMs() + HUGE_JUMP_COOLDOWN_MS
+            // A scroll is the same kind of content-space discontinuity for
+            // the fixation detector as it is for the huge-jump EMA above --
+            // reseed it so the next sample starts a fresh cluster instead of
+            // reporting a huge (scroll-sized) dispersion against pre-scroll
+            // samples.
+            fixationDetector.reset()
         }
         contentOrigin = origin
     }
@@ -401,6 +503,7 @@ final class AppModel: ObservableObject {
         let w = tracker.forceRelocate(wordID: wordID, nowMs: nowMs)
         dynamicY.discardCurrentLine()
         dynamicX.discardCurrentLine()
+        fixationDetector.reset()
         // Double-tap bypasses handleSample's per-frame processGaze call, so
         // feed the recorder here too -- otherwise the word the user just
         // jumped away from would never get its dwell time flushed.
@@ -417,18 +520,33 @@ final class AppModel: ObservableObject {
         if phase == .calibrating, pursuitActive {
             calibrator.addSample(gx: sample.gx, gy: sample.gy,
                                   screenX: Double(pursuitTargetPoint.x), screenY: Double(pursuitTargetPoint.y))
+            // Same pursuit target, same instant -- the baseline pipeline is
+            // calibrated on identical ground truth to the engineered one,
+            // so the accuracy-check comparison later is a fair, paired
+            // measurement (see ARKIT_GAZE_RESEARCH.md).
+            baselineCalibrator.addSample(gx: sample.lax, gy: sample.lay,
+                                          screenX: Double(pursuitTargetPoint.x), screenY: Double(pursuitTargetPoint.y))
         }
 
         guard calibrator.isFitted, let raw = calibrator.predict(gx: sample.gx, gy: sample.gy) else { return }
         rawPoint = raw
 
+        // Baseline prediction is best-effort and never gates the main
+        // pipeline below -- if it's unfitted or fails, baselinePoint/
+        // baselineAccuracySamples just stay empty for this run.
+        let baselineRaw = baselineCalibrator.isFitted ? baselineCalibrator.predict(gx: sample.lax, gy: sample.lay) : nil
+
         if phase == .accuracyCheck, accuracyActive {
             accuracySamples.append(raw)
+            if let br = baselineRaw { baselineAccuracySamples.append(br) }
         }
 
         guard phase == .reading else { return }
         let filtered = filter.filter(x: Double(raw.x), y: Double(raw.y), tSec: sample.timestampMs / 1000)
         filteredPoint = filtered
+        if let br = baselineRaw {
+            baselinePoint = baselineFilter.filter(x: Double(br.x), y: Double(br.y), tSec: sample.timestampMs / 1000)
+        }
 
         let contentX = filtered.x - contentOrigin.x
         let contentY = filtered.y - contentOrigin.y
@@ -451,7 +569,17 @@ final class AppModel: ObservableObject {
         let calibratedY = dynamicY.calibrate(contentY)
         let calibratedX = dynamicX.calibrate(contentX)
 
-        let zcut = tracker.processGaze(gx: calibratedX, gy: calibratedY, nowMs: sample.timestampMs)
+        // Fixation clustering on the final (dynamic-calibrated) point,
+        // tolerance scaled to this user's measured noise + the current
+        // position's error-model boost (edges/bottom -- see
+        // Tracker.fixationDispersionThreshold). Word assignment below uses
+        // the running centroid; Z-cut/huge-jump line tracking (inside
+        // processGaze) still uses the raw calibratedX/Y every frame.
+        let dispersion = tracker.fixationDispersionThreshold(gx: calibratedX)
+        fixationDetector.push(x: calibratedX, y: calibratedY, tMs: sample.timestampMs, dispersionPx: dispersion)
+        let fixationX = fixationDetector.currentCentroid?.x
+
+        let zcut = tracker.processGaze(gx: calibratedX, gy: calibratedY, nowMs: sample.timestampMs, fixationX: fixationX)
 
         if let wid = tracker.state.currentWordID, layout.words.indices.contains(wid) {
             sessionRecorder.update(wordID: wid, wordText: layout.words[wid].text, nowMs: sample.timestampMs)
@@ -496,6 +624,11 @@ final class AppModel: ObservableObject {
         lines.append("last advance: \(st.lineAdvancedBy.rawValue)")
         lines.append(String(format: "Y-calib k=%.2f b=%.0f (n=%d)", dynamicY.k, dynamicY.b, dynamicY.pairCount))
         lines.append(String(format: "X-calib k=%.2f b=%.0f (n=%d)", dynamicX.k, dynamicX.b, dynamicX.pairCount))
+        if let c = fixationDetector.currentCentroid {
+            lines.append(String(format: "fixation @ (%.0f, %.0f)", c.x, c.y))
+        } else {
+            lines.append("fixation: in transit (saccade)")
+        }
         hudLines = lines
 
         if zcut {

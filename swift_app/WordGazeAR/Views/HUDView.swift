@@ -12,10 +12,11 @@ struct HUDView: View {
             HStack {
                 Text("Debug HUD").font(.caption).bold().foregroundColor(.white)
                 Spacer()
-                Text(model.faceVisible ? "face ok" : "face lost")
+                Text(model.isBlinking ? "blink" : (model.faceVisible ? "face ok" : "face lost"))
                     .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(model.faceVisible ? Color(red: 0.133, green: 0.773, blue: 0.369)
-                                                          : Color(red: 0.937, green: 0.267, blue: 0.267))
+                    .foregroundColor(model.isBlinking ? Color(red: 0.976, green: 0.647, blue: 0.145)
+                                        : (model.faceVisible ? Color(red: 0.133, green: 0.773, blue: 0.369)
+                                                              : Color(red: 0.937, green: 0.267, blue: 0.267)))
             }
             ForEach(Array(model.hudLines.enumerated()), id: \.offset) { _, line in
                 Text(line)

@@ -27,9 +27,31 @@ A simple Swift/ARKit port of the word-level gaze reader in [`web_app/`](../web_a
   tinted, distinct from the current line/word highlight. This is the paper's actual headline
   feature ("See Where You Read") — the mechanisms above exist to keep this trail accurate, but
   it was missing from the initial port; see `Views/WordView.swift`.
+- **Blink gating** — a per-frame blend-shape check drops the sample entirely during a blink,
+  before either gaze pipeline computes anything from it. See `Gaze/ARGazeEstimator.swift`.
+- **Online fixation detection** — an I-DT (dispersion-threshold) detector clusters gaze samples
+  into fixations and word assignment reads its running centroid instead of the raw per-frame
+  point, so a saccade in flight (which ARKit resolves poorly at reading scale — see
+  `ARKIT_GAZE_RESEARCH.md`) can't misassign a word. See `Gaze/FixationDetector.swift`.
+- **Position-dependent error model** — the huge-jump threshold and fixation-clustering
+  tolerance both scale up near the horizontal edges and the bottom of the passage, where ARKit
+  face tracking is independently documented to be noisier. See `Gaze/ErrorModel.swift`.
+- **Preferred-viewing-location + length-prior word assignment** — word hit-testing is biased
+  slightly left of a word's center and breaks close boundary calls toward the longer candidate,
+  instead of pure nearest-distance. See `Models/Tracker.swift`'s `assignWord`.
+- **Apple-`lookAtPoint` baseline pipeline** — a second, parallel gaze pipeline sourced from
+  ARKit's own `lookAtPoint` signal, calibrated and measured identically to the engineered
+  ray/plane pipeline above, so the accuracy-check step reports a real, on-device
+  ours-vs-Apple's-own-signal comparison. See `Gaze/ARGazeEstimator.swift` + `AppModel.swift`.
 
-Left out on purpose: the error-vector-cloud model and LLM-assisted jump election — see
-`CODE_STUDY.md` at the repo root for what those do, if you want to add them back later.
+Left out on purpose: the error-vector-cloud model, the HMM/Viterbi global decoder, and
+LLM-assisted jump election — see `CODE_STUDY.md` at the repo root and `ARKIT_GAZE_RESEARCH.md`
+in this folder for what those do, if you want to add them back later.
+
+**`ARKIT_GAZE_RESEARCH.md`** (this folder) is the ARKit-specific counterpart to the repo root's
+`CODE_STUDY.md`/`IMPROVEMENTS.md`: full citations for everything ARKit/TrueDepth-specific in
+this list (the noise floor to expect, the blink/edge/bottom effects, and exactly which paper
+motivated which piece of code above).
 
 ## Data collection
 
@@ -76,6 +98,15 @@ To wire this up:
 Xcode (step 3 of Setup below) so it ends up in the app bundle — check its **Target Membership**
 in the File Inspector if `PassageStore` reports zero passages at runtime.
 
+### Viewing collected sessions
+
+`../viewer/` at the repo root is a small local-only web page for browsing every session that's
+landed in `reading_sessions` — a sortable/filterable list plus a per-session detail view
+(heatmap + fixation trail, matching what `Views/ReplayView.swift` shows on-device). It needs the
+Supabase **service_role** key (not the app's anon key) since reading everyone's data requires
+bypassing the insert-only RLS policy above — see `../viewer/README.md` for setup and the
+security note on why that key must never leave your machine.
+
 ## The one thing that's actually different: the gaze source
 
 The web/python apps estimate gaze from a **webcam** (WebGazer ridge regression, or an
@@ -104,6 +135,13 @@ This is still an approximation (screen ≈ camera's own Z=0 plane; no per-device
 offset lookup), so don't expect pixel-perfect stability across a foot of head travel — but it
 should hold up through normal reading posture shifts far better than angle-only ever could.
 
+**Is that actually better than just using Apple's own `lookAtPoint`?** Rather than only assert
+it in this paragraph, `ARGazeEstimator` now also runs `ARFaceAnchor.lookAtPoint` (Apple's own
+gaze-direction estimate, used with no head-translation correction — the "naive" approach this
+section argues against) through an identical calibration + measurement pipeline in parallel, as
+a baseline. The accuracy-check step at the end of calibration reports both numbers side by
+side. See `ARKIT_GAZE_RESEARCH.md` §3.2.
+
 ## File map
 
 ```
@@ -119,12 +157,14 @@ WordGazeAR/
     SessionRecorder.swift        per-word fixation trail -> aggregated heatmap                       (new)
     ReadingSessionPayload.swift  wire format shared by local JSON + Supabase upload                  (new)
   Gaze/
-    ARGazeEstimator.swift      ARKit session + eye ray/screen-plane intersection -> (gx,gy)  (new: no python equivalent)
+    ARGazeEstimator.swift      ARKit session, blink gating, eye ray/plane intersection (gx,gy) + lookAtPoint baseline (lax,lay)  (new: no python equivalent)
     Calibrator.swift            (gx,gy) -> screen point, linear regression      (ports gaze/calibration.py)
     OneEuroFilter.swift          smoothing + forward prediction                  (ports gaze/calibration.py)
     RollingLinearFit.swift        shared rolling-OLS core for both dynamic calibrators
     DynamicYCalibrator.swift     rolling Y' = k*Y+b refit on every Z-cut          (ports app.js §4)
     DynamicXCalibrator.swift     rolling X' = k*X+b refit on every Z-cut          (new: app.js never had this)
+    ErrorModel.swift              position-dependent error radius (edges/bottom worse)    (new)
+    FixationDetector.swift        online I-DT fixation clustering                          (new)
   Services/
     SupabaseConfig.swift          project URL + anon key                                             (new)
     SupabaseClient.swift          POST a finished session to Postgres via PostgREST                  (new)
@@ -185,8 +225,11 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
    it'll tell you and offer **Retry**, which restarts the same path from the beginning.
 5. **Accuracy check**: stare at the single green dot for ~3 seconds without moving your head.
    This measures your gaze noise (mean error + standard deviation) and feeds the std-dev into
-   `Tracker.state.calibStdPx`, which sets the huge-jump threshold (`JUMP_K × σ`) to *your*
-   measured noise instead of a generic fallback. Tap "Start reading" once it reports a result.
+   `Tracker.state.calibStdPx`, which sets the huge-jump threshold (`JUMP_K × σ`) and the
+   fixation-clustering tolerance to *your* measured noise instead of a generic fallback. The
+   result text also reports the **same measurement for the Apple-`lookAtPoint` baseline
+   pipeline** side by side with ours, plus both expressed relative to the passage's average word
+   width — see `ARKIT_GAZE_RESEARCH.md` §3.2. Tap "Start reading" once it reports a result.
 6. Reading view starts automatically. By design, it shows **plain, unhighlighted text** — no
    gaze dots, no current-line/current-word highlight, no read-trail, no HUD. Any of that would
    give the participant live feedback about where the system thinks they're looking, which
@@ -202,14 +245,16 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
    feedback that's always visible (a brief flash on the tapped word), since it's a direct
    response to the reader's own action rather than passive gaze exposure.
 10. "Settings" lets you change the passage font size (re-flows the layout live) and shows the
-    measured calibration noise/error read-only. "Reset" restarts tracking from the top;
-    "Recalibrate" redoes the whole pursuit calibration + accuracy check (useful if you moved the
-    device or your head position changed a lot — this also resets both dynamic regressions).
-    **"Show Debug"** reveals everything hidden in step 6 — raw/filtered gaze dots, current
-    line/word highlighting, the read-trail, and the bottom-right HUD (mirrors `ui/hud.py`:
-    current line/word, Z-cut reach/status, huge-jump distance vs. threshold, last-advance
-    reason, and both dynamic regressions' `k`/`b`/pair counts) — for debugging tracking quality
-    outside of an actual data-collection session. Off by default; toggles back to "Hide Debug".
+    measured calibration noise/error read-only, plus the **ours-vs-Apple-lookAtPoint accuracy
+    comparison** from step 5. "Reset" restarts tracking from the top; "Recalibrate" redoes the
+    whole pursuit calibration + accuracy check (useful if you moved the device or your head
+    position changed a lot — this also resets both dynamic regressions and both gaze pipelines).
+    **"Show Debug"** reveals everything hidden in step 6 — raw/filtered gaze dots, the amber
+    Apple-baseline dot, current line/word highlighting, the read-trail, and the bottom-right HUD
+    (mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump distance vs.
+    threshold, last-advance reason, both dynamic regressions' `k`/`b`/pair counts, blink state,
+    and live fixation-clustering status) — for debugging tracking quality outside of an actual
+    data-collection session. Off by default; toggles back to "Hide Debug".
 11. **"Finish"** ends the session, saves it locally, attempts the Supabase upload, and shows the
     summary screen (duration, longest dwell times, upload status). **"Watch reading replay
     (3x)"** (`Views/ReplayView.swift`) plays back the just-recorded fixation trail at 3x speed —
@@ -235,6 +280,14 @@ Same constants as the reference apps, same meanings — see `Models/Tracker.swif
 | `HUGE_JUMP_SUSTAIN_MS` | 500 | deviation must persist this long to relocate |
 | `HUGE_JUMP_COOLDOWN_MS` | 900 | settle window after a relocation |
 | `EMA_ALPHA` | 0.25 | gaze smoothing for the huge-jump test |
+| `PVL_OFFSET_FRACTION` | 0.4 | word hit-testing landing-position bias (fraction of word width from `xStart`) |
+| `LENGTH_PRIOR_WEIGHT` | 6 | weight on `log(word length)` when breaking word-boundary ties |
+| `BLINK_THRESHOLD` (`ARGazeEstimator.swift`) | 0.5 | blend-shape blink coefficient above which a frame is dropped |
+| `ErrorModel.edgeBoost` / `.bottomBoost` (`ErrorModel.swift`) | 0.6 / 0.3 | extra error-radius fraction at edges / toward the bottom |
+| `FixationDetector.minDurationMs` | 100 | minimum duration for a *reportable* fixation |
+
+The last five are new in this pass and untuned on a real device — see `ARKIT_GAZE_RESEARCH.md`
+§5 for what motivated each one, and retune them after your first on-device read-through.
 
 If the Z-cut isn't firing on a real device (gaze rarely reaches the true screen edges), the
 fix that helped most in the web/python apps was **lowering `Z_RIGHT`** (e.g. to 0.6) rather
