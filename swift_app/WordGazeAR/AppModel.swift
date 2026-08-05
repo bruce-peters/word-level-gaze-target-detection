@@ -97,9 +97,15 @@ final class AppModel: ObservableObject {
     /// the two are a fair, paired comparison -- see ARKIT_GAZE_RESEARCH.md.
     /// Never gates or blocks the real reading session: it's supplementary
     /// instrumentation, not part of the tracked-reading experience.
+    ///
+    /// Deliberately NOT run through GazeFilter/One-Euro: the baseline is
+    /// meant to represent "Apple's own signal, nothing else," and the
+    /// accuracy-check comparison (`finishAccuracyCheck`) already measures
+    /// raw predictions for both pipelines -- filtering the baseline for
+    /// display but not for the reported numbers would make the overlay
+    /// dot and the headline stat inconsistent with each other.
     let baselineCalibrator = Calibrator()
-    private let baselineFilter = GazeFilter()
-    @Published var baselinePoint: CGPoint? = nil
+    @Published var baselineRawPoint: CGPoint? = nil
     private var baselineAccuracySamples: [CGPoint] = []
 
     /// Online I-DT fixation clustering on the engineered pipeline's final
@@ -342,7 +348,6 @@ final class AppModel: ObservableObject {
 
     func startReading() {
         filter.reset()
-        baselineFilter.reset()
         fixationDetector.reset()
         tracker.startTracking()
         sessionRecorder.start(nowMs: ARGazeEstimator.nowMs())
@@ -359,7 +364,7 @@ final class AppModel: ObservableObject {
         pursuitActive = false
         rawPoint = nil
         filteredPoint = nil
-        baselinePoint = nil
+        baselineRawPoint = nil
         accuracyResultText = nil
         accuracyReady = false
         oursAccuracy = nil
@@ -369,7 +374,6 @@ final class AppModel: ObservableObject {
 
     func resetTracking() {
         filter.reset()
-        baselineFilter.reset()
         fixationDetector.reset()
         tracker.startTracking()
     }
@@ -532,9 +536,12 @@ final class AppModel: ObservableObject {
         rawPoint = raw
 
         // Baseline prediction is best-effort and never gates the main
-        // pipeline below -- if it's unfitted or fails, baselinePoint/
-        // baselineAccuracySamples just stay empty for this run.
+        // pipeline below -- if it's unfitted or fails, baselineRawPoint/
+        // baselineAccuracySamples just stay empty for this run. Published
+        // as-is, same as `rawPoint` above -- no filtering, see the
+        // baselineCalibrator property comment for why.
         let baselineRaw = baselineCalibrator.isFitted ? baselineCalibrator.predict(gx: sample.lax, gy: sample.lay) : nil
+        baselineRawPoint = baselineRaw
 
         if phase == .accuracyCheck, accuracyActive {
             accuracySamples.append(raw)
@@ -544,9 +551,6 @@ final class AppModel: ObservableObject {
         guard phase == .reading else { return }
         let filtered = filter.filter(x: Double(raw.x), y: Double(raw.y), tSec: sample.timestampMs / 1000)
         filteredPoint = filtered
-        if let br = baselineRaw {
-            baselinePoint = baselineFilter.filter(x: Double(br.x), y: Double(br.y), tSec: sample.timestampMs / 1000)
-        }
 
         let contentX = filtered.x - contentOrigin.x
         let contentY = filtered.y - contentOrigin.y

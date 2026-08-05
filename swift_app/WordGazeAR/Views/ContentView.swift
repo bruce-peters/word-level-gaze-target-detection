@@ -47,17 +47,18 @@ struct ContentView: View {
                             .position(filtered)
                             .allowsHitTesting(false)
                     }
-                    // Apple lookAtPoint baseline -- same calibration
-                    // procedure, different upstream signal (see
-                    // ARGazeEstimator's file header). Debug-only, distinct
-                    // color, so a live read-through visually shows whether
-                    // green (ours) tracks the line noticeably better than
-                    // amber (baseline).
-                    if let baseline = model.baselinePoint {
-                        Circle()
-                            .stroke(Color(red: 0.976, green: 0.647, blue: 0.145).opacity(0.9), lineWidth: 2)
-                            .frame(width: 14, height: 14)
-                            .position(baseline)
+                    // Apple lookAtPoint baseline -- raw, unfiltered (no
+                    // One-Euro, no dynamic calibration, nothing): this is
+                    // meant to represent "Apple's own signal, calibrated,
+                    // and nothing else," matching exactly what the
+                    // accuracy-check numbers measure. Same calibration
+                    // procedure as the engineered pipeline, different
+                    // upstream signal -- see ARGazeEstimator's file header.
+                    if let baselineRaw = model.baselineRawPoint {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(Color(red: 0.937, green: 0.267, blue: 0.267))
+                            .position(baselineRaw)
                             .allowsHitTesting(false)
                     }
                 }

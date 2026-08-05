@@ -249,8 +249,9 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
     comparison** from step 5. "Reset" restarts tracking from the top; "Recalibrate" redoes the
     whole pursuit calibration + accuracy check (useful if you moved the device or your head
     position changed a lot — this also resets both dynamic regressions and both gaze pipelines).
-    **"Show Debug"** reveals everything hidden in step 6 — raw/filtered gaze dots, the amber
-    Apple-baseline dot, current line/word highlighting, the read-trail, and the bottom-right HUD
+    **"Show Debug"** reveals everything hidden in step 6 — raw/filtered gaze dots, the red
+    ✕ marking the raw (unfiltered) Apple-`lookAtPoint` baseline point, current line/word
+    highlighting, the read-trail, and the bottom-right HUD
     (mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump distance vs.
     threshold, last-advance reason, both dynamic regressions' `k`/`b`/pair counts, blink state,
     and live fixation-clustering status) — for debugging tracking quality outside of an actual
