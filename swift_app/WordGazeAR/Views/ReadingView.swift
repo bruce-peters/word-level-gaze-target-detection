@@ -63,7 +63,7 @@ struct ReadingView: View {
         }
         .background(Color(red: 0.043, green: 0.051, blue: 0.071))
         .overlay(alignment: .bottomTrailing) {
-            if model.showDebugOverlay {
+            if model.showDebugHUD {
                 HUDView(model: model).padding(10)
             }
         }
@@ -76,8 +76,13 @@ struct ReadingView: View {
         HStack(spacing: 8) {
             Text("Word Gaze AR").font(.subheadline).bold().foregroundColor(.white)
             Spacer()
-            Button(model.showDebugOverlay ? "Hide Debug" : "Show Debug") { model.showDebugOverlay.toggle() }
-                .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.4)))
+            // Separate on purpose: you often want to watch word/line
+            // tracking (Overlay) without the diagnostic HUD panel
+            // obstructing the passage, or vice versa.
+            Button(model.showDebugOverlay ? "Hide Overlay" : "Show Overlay") { model.showDebugOverlay.toggle() }
+                .buttonStyle(PillButtonStyle(color: model.showDebugOverlay ? Color(red: 0.145, green: 0.388, blue: 0.922) : Color.gray.opacity(0.4)))
+            Button(model.showDebugHUD ? "Hide HUD" : "Show HUD") { model.showDebugHUD.toggle() }
+                .buttonStyle(PillButtonStyle(color: model.showDebugHUD ? Color(red: 0.145, green: 0.388, blue: 0.922) : Color.gray.opacity(0.4)))
             Button("Settings") { showSettings = true }
                 .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.4)))
             Button("Reset") { model.resetTracking() }

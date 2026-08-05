@@ -35,6 +35,16 @@ struct HomeView: View {
                     .font(.subheadline)
                     .foregroundColor(Color(white: 0.75))
 
+                Button {
+                    model.beginQuickTest()
+                } label: {
+                    Text("Quick test — skip straight to Winnie-the-Pooh")
+                        .font(.footnote).bold()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(PillButtonStyle(color: Color.gray.opacity(0.35)))
+
                 field("Name") {
                     TextField("Participant name", text: $name)
                         .textFieldStyle(.roundedBorder)

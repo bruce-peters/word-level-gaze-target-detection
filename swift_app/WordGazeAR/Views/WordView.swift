@@ -4,9 +4,11 @@
 // app_window.py's _paint_word -- the read-trail is the paper's central
 // "See Where You Read" payoff: every word up to the furthest point reached
 // stays tinted, so a line jump never loses your place. All of that is gated
-// behind showDebugOverlay now (off by default) so participants doing an
-// actual reading session get plain, unhighlighted text with no live
-// indication of where the system thinks they're looking.
+// behind showDebugOverlay, which defaults ON for everyday on-device
+// iteration/demoing -- turn it off explicitly from ReadingView's top bar
+// before running an actual blind data-collection participant, since a live
+// indication of where the system thinks they're looking would otherwise
+// bias how they read.
 
 import SwiftUI
 
@@ -15,12 +17,12 @@ struct WordView: View {
     @ObservedObject var state: TrackState
     let flashWordID: Int?
     let font: Font
-    /// Off by default (AppModel.showDebugOverlay) -- with this false, a word
-    /// never shows anything about where the system currently thinks the
-    /// reader is looking, including the read-trail (which updates in
-    /// real time right alongside the current word). The only feedback that
-    /// survives is the double-tap relocation flash, since that's a response
-    /// to the reader's own explicit action, not passive gaze exposure.
+    /// AppModel.showDebugOverlay -- with this false, a word never shows
+    /// anything about where the system currently thinks the reader is
+    /// looking, including the read-trail (which updates in real time right
+    /// alongside the current word). The only feedback that survives is the
+    /// double-tap relocation flash, since that's a response to the reader's
+    /// own explicit action, not passive gaze exposure.
     let showDebugOverlay: Bool
     let onDoubleTap: () -> Void
 

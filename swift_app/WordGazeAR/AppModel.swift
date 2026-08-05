@@ -43,12 +43,20 @@ final class AppModel: ObservableObject {
     @Published var phase: AppPhase = .home
     @Published var calibError: String? = nil
 
-    /// Gates every piece of "here's what we think you're looking at" UI --
-    /// raw/filtered gaze dots, current line/word highlighting, and the HUD
-    /// panel. Off by default: showing a live indicator of the tracked word
-    /// while someone reads would bias their eye movements and undermine the
-    /// experiment. Toggled on deliberately from ReadingView for debugging.
-    @Published var showDebugOverlay: Bool = false
+    /// Gates the gaze dots + current line/word/read-trail highlighting.
+    /// Defaults ON: for actual blind data-collection sessions (the original
+    /// reason this existed -- a live indicator of the tracked word would
+    /// bias how someone reads), turn it off explicitly from ReadingView's
+    /// top bar before starting a real participant. Separate from
+    /// `showDebugHUD` below on purpose: you often want to watch word/line
+    /// tracking on-screen without the HUD panel obstructing the passage.
+    @Published var showDebugOverlay: Bool = true
+
+    /// Gates the bottom-right HUD panel (`HUDView`) specifically. Off by
+    /// default -- it's diagnostic detail (Z-cut/huge-jump internals,
+    /// regression fits), not needed for the everyday "does tracking look
+    /// right" check `showDebugOverlay` already covers.
+    @Published var showDebugHUD: Bool = false
 
     // MARK: - data-collection session state (home screen, recording, upload)
 
@@ -169,6 +177,19 @@ final class AppModel: ObservableObject {
         uploadState = .idle
         lastSessionPayload = nil
         phase = .welcome
+    }
+
+    /// "Quick test" -- HomeView's fast path for on-device iteration/demoing:
+    /// skips typing in participant details and always uses the Winnie-the-
+    /// Pooh passage, but otherwise goes through the exact same
+    /// welcome/calibration/accuracy-check flow `beginSession` does (there's
+    /// no shortcut around actually calibrating a real gaze source). Falls
+    /// back to the first available passage if `winnie_the_pooh` isn't found
+    /// in `passages.json` for some reason, rather than doing nothing.
+    func beginQuickTest() {
+        guard let passage = passages.first(where: { $0.id == "winnie_the_pooh" }) ?? passages.first else { return }
+        let participant = ParticipantInfo(name: "Test", age: 25, proficiency: .medium)
+        beginSession(participant: participant, passage: passage)
     }
 
     func beginCalibration() {

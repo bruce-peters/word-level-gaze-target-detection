@@ -171,7 +171,7 @@ WordGazeAR/
     SessionStorage.swift          local JSON backup + pending-upload tracking                         (new)
   Views/
     ContentView.swift          phase switch + shared gaze-dot overlay
-    HomeView.swift               participant info + passage picker                                    (new)
+    HomeView.swift               participant info + passage picker + "Quick test" shortcut          (new)
     WelcomeView.swift
     CalibrationView.swift      smooth-pursuit dot-following calibration
     AccuracyCheckView.swift     final stare-at-a-dot step, measures noise σ
@@ -215,7 +215,11 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
 
 1. **Home screen** → enter the participant's name, age, and reading proficiency, pick a
    passage, then "Continue" (see Data collection above). "Change" on the next screen comes back
-   here if you need to fix something before calibrating.
+   here if you need to fix something before calibrating. For on-device iteration/demoing
+   instead of a real participant, **"Quick test"** skips all of that and jumps straight into the
+   Winnie-the-Pooh passage with placeholder participant info (`AppModel.beginQuickTest()`) —
+   still goes through the real welcome/calibration/accuracy-check flow below, since there's no
+   shortcut around actually calibrating a gaze source.
 2. **Welcome screen** → "Start calibration".
 4. **Follow the moving dot with your eyes** for about 15 seconds — no tapping, no holding
    anything, just track it while keeping your head still. It sweeps a smooth Lissajous path
@@ -230,11 +234,14 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
    result text also reports the **same measurement for the Apple-`lookAtPoint` baseline
    pipeline** side by side with ours, plus both expressed relative to the passage's average word
    width — see `ARKIT_GAZE_RESEARCH.md` §3.2. Tap "Start reading" once it reports a result.
-6. Reading view starts automatically. By design, it shows **plain, unhighlighted text** — no
-   gaze dots, no current-line/current-word highlight, no read-trail, no HUD. Any of that would
-   give the participant live feedback about where the system thinks they're looking, which
-   would bias how they read and undermine the point of collecting natural reading data. Every
-   word visited still gets logged in the background regardless (see Data collection above).
+6. Reading view starts automatically. **Overlay** (gaze dots, current-line/current-word
+   highlight, read-trail) defaults **on** — handy for everyday on-device iteration and demoing,
+   since you can watch tracking work live. **For an actual blind data-collection participant,
+   tap "Hide Overlay" first** (top bar) so they get plain, unhighlighted text with no live
+   feedback about where the system thinks they're looking — that live feedback would otherwise
+   bias how they read and undermine the point of collecting natural reading data. The HUD panel
+   is separate and defaults **off** either way (step 10). Every word visited still gets logged
+   in the background regardless of either toggle (see Data collection above).
 7. Read a line left→right, then sweep your eyes back to the start of the next line — that
    return sweep is the Z-cut that advances `currentLine`, and also feeds that line's raw X/Y
    into the dynamic-X/Y regressions.
@@ -249,13 +256,15 @@ This folder is just Swift source, not a buildable Xcode project yet. On a Mac:
     comparison** from step 5. "Reset" restarts tracking from the top; "Recalibrate" redoes the
     whole pursuit calibration + accuracy check (useful if you moved the device or your head
     position changed a lot — this also resets both dynamic regressions and both gaze pipelines).
-    **"Show Debug"** reveals everything hidden in step 6 — raw/filtered gaze dots, the red
-    ✕ marking the raw (unfiltered) Apple-`lookAtPoint` baseline point, current line/word
-    highlighting, the read-trail, and the bottom-right HUD
-    (mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump distance vs.
-    threshold, last-advance reason, both dynamic regressions' `k`/`b`/pair counts, blink state,
-    and live fixation-clustering status) — for debugging tracking quality outside of an actual
-    data-collection session. Off by default; toggles back to "Hide Debug".
+    Two independent toggles, split so you can watch tracking without the HUD in the way (or vice
+    versa):
+    - **"Show/Hide Overlay"** (`AppModel.showDebugOverlay`, **on by default** — see step 6) —
+      raw/filtered gaze dots, the red ✕ marking the raw (unfiltered) Apple-`lookAtPoint`
+      baseline point, current line/word highlighting, and the read-trail.
+    - **"Show/Hide HUD"** (`AppModel.showDebugHUD`, **off by default**) — the bottom-right
+      diagnostic panel (mirrors `ui/hud.py`: current line/word, Z-cut reach/status, huge-jump
+      distance vs. threshold, last-advance reason, both dynamic regressions' `k`/`b`/pair
+      counts, blink state, and live fixation-clustering status).
 11. **"Finish"** ends the session, saves it locally, attempts the Supabase upload, and shows the
     summary screen (duration, longest dwell times, upload status). **"Watch reading replay
     (3x)"** (`Views/ReplayView.swift`) plays back the just-recorded fixation trail at 3x speed —
