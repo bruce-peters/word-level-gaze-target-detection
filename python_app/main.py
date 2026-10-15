@@ -43,7 +43,7 @@ def main():
 
     def make_source(camera_index):
         if args.mouse_debug:
-            return MouseGazeSource()
+            return MouseGazeSource(root=root)
         return UniFaceGazeSource(camera_index=camera_index)
 
     state["source"] = make_source(args.camera)

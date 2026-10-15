@@ -87,10 +87,11 @@ To wire this up:
 1. Run `0001_reading_sessions.sql` against your Supabase project (SQL editor, or via the
    Supabase MCP server once authenticated — see the repo root for the `claude mcp add` command
    already used to register it).
-2. Fill in `Services/SupabaseConfig.swift`: `projectURL` is already set; `anonKey` is left
-   blank — get it from the Supabase dashboard under **Project Settings → API → Project API
-   keys → anon/public**, or ask for it to be fetched via the MCP server once authenticated.
-3. Until `anonKey` is filled in, `SupabaseClient` throws `.notConfigured` on every upload
+2. `Services/SupabaseConfig.swift` holds `projectURL` and `anonKey`. Both are already filled in
+   for the original project; to point the app at your own Supabase project, replace them with
+   your project URL and its anon/public key (Supabase dashboard → **Project Settings → API →
+   Project API keys → anon/public**).
+3. If `anonKey` is empty, `SupabaseClient` throws `.notConfigured` on every upload
    attempt, but sessions still land safely as local JSON files — nothing is lost, uploads just
    stay pending until the key is set and a retry runs.
 

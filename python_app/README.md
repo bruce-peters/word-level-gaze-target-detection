@@ -1,6 +1,6 @@
 # Word Gaze Tracker — Python / Tkinter / MobileGaze port
 
-Desktop port of the browser prototype (`../app.js`), swapping WebGazer.js for
+Desktop port of the browser prototype (`../web_app/app.js`), swapping WebGazer.js for
 a PyTorch/ONNX gaze-estimation model. Same reading-tracking core as the JS
 version: Z-cut line switching + huge-jump relocation to the nearest sentence.
 See `../README.md` for the underlying approach; this file only covers the
@@ -18,10 +18,15 @@ download step.
 
 ## Setup
 
+Needs Python 3 with Tkinter (included in the python.org installers for Windows
+and macOS; on Debian/Ubuntu: `sudo apt install python3-tk`). Tested on Linux
+with Python 3.12 (`uniface` 4.0.0, `onnxruntime` 1.31, `opencv-python` 5.0).
+
 ```bash
 cd python_app
 python -m venv .venv
 .venv\Scripts\activate        # Windows
+source .venv/bin/activate     # macOS / Linux
 pip install -r requirements.txt
 ```
 
@@ -46,7 +51,8 @@ specific problem instead of silently doing nothing.
 
 `--mouse-debug` is useful for developing/testing the calibration UI, Z-cut,
 word highlighting, and HUD without a working webcam or model install — move
-the mouse the way you'd move your eyes.
+the mouse the way you'd move your eyes. It works on Windows, macOS, and Linux
+(Windows reads the cursor via `ctypes`; elsewhere it's polled through Tk).
 
 ## Structure
 
