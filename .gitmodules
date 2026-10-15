@@ -1,0 +1,3 @@
+[submodule "arkit-demo-swift"]
+	path = arkit-demo-swift
+	url = https://github.com/bruce-peters/arkit-swift.git
